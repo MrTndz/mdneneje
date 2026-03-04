@@ -1,15 +1,14 @@
 {
-  "name": "ai-coding-agent-bot",
-  "version": "1.0.0",
-  "description": "AI Coding Agent Telegram Bot — Groq + Gemini (Free APIs)",
+  "name": "merai-monitoring-bot",
+  "version": "9.0.0",
+  "description": "MerAI Monitoring + AI Bot",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "scripts": { "start": "node index.js" },
   "dependencies": {
-    "grammy": "^1.31.0"
+    "grammy": "^1.31.0",
+    "better-sqlite3": "^9.4.3",
+    "archiver": "^7.0.1",
+    "node-cron": "^3.0.3"
   },
-  "engines": {
-    "node": ">=18.0.0"
-  }
+  "engines": { "node": ">=18.0.0" }
 }
