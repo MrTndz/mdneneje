@@ -1,68 +1,84 @@
-# 🤖 AI Coding Agent Bot
+# MerAI — Monitoring & AI
 
-Telegram бот который пишет огромные коды. Бесплатные API!
+Telegram бот для мониторинга сообщений + AI-ассистент.
 
-## 📦 Установка на BotHost
+## Возможности
 
-### Шаг 1 — Получи бесплатные API ключи
+### Мониторинг (Business API)
+- Сохраняет все сообщения через Telegram Business API
+- Перехватывает медиа с таймером самоуничтожения ⏱
+- При удалении сообщения — отправляет оригинал + файл
+- При редактировании — показывает "было / стало"
+- При удалении чата — ZIP-архив всей переписки
 
-**Groq API (Llama 3.3 70B + DeepSeek R1) — БЕСПЛАТНО:**
-1. Зайди на https://console.groq.com
-2. Зарегистрируйся (можно через Google)
-3. API Keys → Create API Key
-4. Скопируй ключ (начинается с `gsk_...`)
+### UserBot (без Premium!)
+- Мониторинг через ваш аккаунт Telegram (как AyuGram)
+- Работает в личных чатах и группах
+- Для входа нужен номер телефона + код из Telegram
+- Требует API_ID и API_HASH от my.telegram.org
 
-**Google Gemini API — БЕСПЛАТНО:**
-1. Зайди на https://aistudio.google.com/apikey
-2. Create API Key
-3. Скопируй ключ (начинается с `AIza...`)
+### AI-ассистент
+- Встроен прямо в бота — просто пишите
+- Groq Llama 3.3 70B / Gemini 2.0 Flash
+- Контекст разговора (последние 20 сообщений)
+- Идентичность: MerAI by mrztn
 
-**Telegram Bot Token:**
-1. Напиши @BotFather в Telegram
-2. /newbot → придумай имя → скопируй токен
+## Установка (BotHost / любой сервер)
 
----
-
-### Шаг 2 — Залей на BotHost
-
-1. Создай новый Node.js нод на BotHost
-2. Загрузи файлы: `index.js` и `package.json`
-3. В разделе **Environment Variables** добавь:
-
-```
-BOT_TOKEN=твой_токен_от_botfather
-GROQ_API_KEY=твой_groq_ключ
-GEMINI_API_KEY=твой_gemini_ключ
+```bash
+npm install
 ```
 
-4. Нажми **Install** (установит grammy)
-5. Нажми **Start**
+## Запуск
 
----
+```bash
+# Задайте переменные окружения
+BOT_TOKEN=... GROQ_API_KEY=... node index.js
 
-## 🎮 Команды бота
+# Или через .env (скопируйте .env.example → .env)
+node index.js
+```
 
-| Команда | Описание |
-|---------|----------|
-| `/start` | Приветствие и инструкция |
-| `/model` | Переключить AI модель |
-| `/clear` | Очистить контекст диалога |
-| `/status` | Текущая модель и статистика |
+## Переменные окружения
 
-## 🔀 Доступные модели
+| Переменная | Обязательно | Описание |
+|---|---|---|
+| `BOT_TOKEN` | ✅ | Токен бота от @BotFather |
+| `GROQ_API_KEY` | ⚠️ | Ключ Groq (для AI) |
+| `GEMINI_API_KEY` | ⚠️ | Ключ Gemini (для AI, запасной) |
+| `TG_API_ID` | ⚠️ | API ID от my.telegram.org (для UserBot) |
+| `TG_API_HASH` | ⚠️ | API Hash от my.telegram.org (для UserBot) |
+| `DB_PATH` | ❌ | Путь к БД (по умолчанию database/merai.db) |
 
-- 🦙 **Llama 3.3 70B** (Groq) — быстрый, отличный для кода
-- 🧠 **DeepSeek R1** (Groq) — думает глубже, для сложных задач  
-- 💎 **Gemini 2.0 Flash** (Google) — огромный контекст
+> ⚠️ Хотя бы один AI-ключ для работы ассистента.  
+> ⚠️ TG_API_ID + TG_API_HASH нужны для UserBot.
 
-## 💡 Примеры запросов
+## Получение API_ID и API_HASH
+
+1. Перейдите на https://my.telegram.org
+2. Войдите со своим аккаунтом
+3. Нажмите "API development tools"
+4. Создайте приложение
+5. Скопируйте `api_id` и `api_hash`
+
+## База данных
+
+БД хранится в файле `database/merai.db` (WAL mode).  
+Автоматический бэкап каждую ночь в `backups/`.
+
+## Админ-панель
+
+Доступна пользователю с ID `7785371505` (@mrztn).  
+Кнопка «👨‍💼 Админ» появляется в главном меню.
+
+## Структура файлов
 
 ```
-Напиши Telegram бот на Python с aiogram 3 с регистрацией и БД SQLite
-
-Создай REST API на Express.js с JWT авторизацией и PostgreSQL
-
-Напиши парсер сайтов на Python с Selenium и сохранением в Excel
-
-Сделай Discord бот с музыкой, модерацией и экономикой
+index.js          — основной код
+package.json      — зависимости
+database/         — база данных SQLite
+media/            — скачанные медиафайлы
+exports/          — экспортированные файлы
+backups/          — бэкапы БД
+sessions/         — (не используется, сессии в БД)
 ```
