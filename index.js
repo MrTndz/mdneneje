@@ -23,8 +23,7 @@ const input = require("input"); // only used as fallback; we handle input via bo
 const BOT_TOKEN     = process.env.BOT_TOKEN   || "8505484152:AAHXEFt0lyeMK5ZSJHRYpdPhhFJ0s142Bng";
 const GROQ_KEY      = process.env.GROQ_API_KEY  || "";
 const GEMINI_KEY    = process.env.GEMINI_API_KEY || "";
-const API_ID        = parseInt(process.env.TG_API_ID  || "0");   // от my.telegram.org
-const API_HASH      = process.env.TG_API_HASH  || "";             // от my.telegram.org
+// UserBot: каждый пользователь вводит свои API_ID и API_HASH от my.telegram.org
 const ADMIN_ID      = 7785371505;
 const DB_PATH       = process.env.DB_PATH || path.join("database", "merai.db");
 
@@ -194,9 +193,11 @@ CREATE TABLE IF NOT EXISTS activity (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Userbot: сессии пользователей
+-- Userbot: сессии пользователей (у каждого свои api_id / api_hash)
 CREATE TABLE IF NOT EXISTS userbot_sessions (
   user_id       INTEGER PRIMARY KEY,
+  api_id        INTEGER,
+  api_hash      TEXT,
   phone         TEXT,
   session_str   TEXT,
   is_active     INTEGER DEFAULT 0,
@@ -851,17 +852,20 @@ bot.callbackQuery("accept_terms", async ctx => {
   updateUser(uid, { accepted_terms: 1 });
   await ctx.editMessageText(
     `✅ <b>Условия приняты!</b>\n\n` +
-    `<b>Варианты подключения:</b>\n\n` +
-    `<b>1️⃣ Business API (Telegram Premium):</b>\n` +
-    `Telegram → Настройки → Конфиденциальность\n` +
-    `→ Чат-боты → Добавить → @${ctx.me.username}\n` +
-    `🎁 Пробный период 3 дня — активируется автоматически!\n\n` +
-    `<b>2️⃣ UserBot (без Premium):</b>\n` +
-    `Нажмите «🤖 UserBot» в меню и следуйте инструкции.\n` +
-    `Понадобится ваш номер телефона + код из Telegram.\n\n` +
-    `<b>💬 AI-ассистент — просто пишите мне!</b>\n` +
-    `Без Premium, без ограничений.`,
-    { parse_mode: "HTML", reply_markup: kbMain(uid) }
+    `Выберите способ мониторинга:\n\n` +
+    `<b>1️⃣ Business API</b> — через Telegram Premium\n` +
+    `Бот подключается к вашему аккаунту как Business-бот.\n` +
+    `Мониторит только <b>личные чаты</b>.\n` +
+    `Требует: <b>Telegram Premium</b>\n\n` +
+    `<b>2️⃣ UserBot</b> — без Telegram Premium\n` +
+    `Работает как ваш второй клиент (как AyuGram).\n` +
+    `Мониторит личные чаты и группы.\n` +
+    `Требует: ваш номер телефона + API-ключи\n\n` +
+    `<b>💬 AI-ассистент</b> — бесплатно, без подключения.\nПросто напишите мне любой вопрос!`,
+    { parse_mode: "HTML", reply_markup: new InlineKeyboard()
+      .text("🔗 Business API (Premium)", "how_business").row()
+      .text("🤖 UserBot (без Premium)", "userbot_menu").row()
+      .text("💬 Просто пользоваться AI", "main_menu") }
   );
   try { await bot.api.sendMessage(ADMIN_ID, `🎉 Новый: ${uid} @${ctx.from.username||"—"} ${ctx.from.first_name||""}`); } catch(e){}
   await ctx.answerCallbackQuery();
@@ -870,6 +874,33 @@ bot.callbackQuery("accept_terms", async ctx => {
 // ================================================================
 //  MAIN MENU
 // ================================================================
+// Инструкция Business API
+bot.callbackQuery("how_business", async ctx => {
+  await ctx.editMessageText(
+    `🔗 <b>Подключение через Business API</b>\n\n` +
+    `<b>Требования:</b>\n` +
+    `• Активная подписка <b>Telegram Premium</b>\n\n` +
+    `<b>Инструкция (5 шагов):</b>\n` +
+    `1️⃣ Откройте <b>Telegram → Настройки</b>\n` +
+    `2️⃣ Нажмите <b>Telegram Business</b>\n` +
+    `3️⃣ Выберите <b>Чат-боты</b>\n` +
+    `4️⃣ Нажмите <b>Добавить чат-бота</b>\n` +
+    `5️⃣ Найдите <b>@${ctx.me.username}</b> и нажмите <b>Подключить</b>\n\n` +
+    `🎁 После подключения автоматически активируется <b>пробный период 3 дня</b>!\n\n` +
+    `<b>Что мониторит:</b>\n` +
+    `✅ Все ваши личные переписки\n` +
+    `✅ Медиа с таймером — перехватывает сразу\n` +
+    `✅ Удалённые и отредактированные\n` +
+    `❌ Группы — Telegram не разрешает\n` +
+    `❌ Секретные чаты — E2E шифрование\n\n` +
+    `💡 Нет Premium? Используйте UserBot — работает без него.`,
+    { parse_mode: "HTML", reply_markup: new InlineKeyboard()
+      .text("🤖 UserBot (без Premium)", "userbot_menu").row()
+      .text("✅ Готово, в главное меню", "main_menu") }
+  );
+  await ctx.answerCallbackQuery();
+});
+
 bot.callbackQuery("main_menu", async ctx => {
   const u = getUser(ctx.from.id);
   if (!u) { await ctx.answerCallbackQuery("❌"); return; }
@@ -1415,46 +1446,49 @@ bot.callbackQuery("userbot_menu", async ctx => {
       `<b>Аккаунт:</b> ${ub.tg_username ? "@"+ub.tg_username : `#${ub.tg_user_id}`}\n` +
       `<b>Телефон:</b> ${ub.phone||"?"}\n` +
       `<b>Подключён:</b> ${(ub.connected_at||"").slice(0,10)}\n\n` +
-      `UserBot мониторит все ваши личные переписки и группы без Telegram Premium.\n\n` +
-      `⚠️ Перехват медиа с таймером работает только при входящих сообщениях.`,
+      `UserBot мониторит все ваши переписки:\n` +
+      `✅ Личные чаты + группы\n` +
+      `✅ Удалённые сообщения любой стороной\n` +
+      `✅ Медиа с таймером\n` +
+      `❌ Секретные чаты (E2E)`,
       { parse_mode: "HTML", reply_markup: new InlineKeyboard()
-        .text("🔴 Отключить UserBot","ub_disconnect").row()
-        .text("📊 Статистика UserBot","ub_stats").row()
-        .text("◀️ Назад","main_menu") }
+        .text("🔴 Отключить", "ub_disconnect").text("📊 Статистика", "ub_stats").row()
+        .text("◀️ Назад", "main_menu") }
     );
-  } else if (ub && !ub.is_active && ub.phone) {
+  } else if (ub && !ub.is_active && ub.session_str) {
     await ctx.editMessageText(
-      `🤖 <b>UserBot</b>\n\n<b>Статус:</b> ❌ Отключён\n\nНажмите «Переподключить» чтобы снова запустить мониторинг.`,
+      `🤖 <b>UserBot</b>\n\n<b>Статус:</b> ❌ Отключён\n\nСессия сохранена. Переподключитесь чтобы возобновить мониторинг.`,
       { parse_mode: "HTML", reply_markup: new InlineKeyboard()
-        .text("🔄 Переподключить","ub_reconnect").row()
-        .text("🗑 Удалить сессию","ub_delete").row()
-        .text("◀️ Назад","main_menu") }
+        .text("🔄 Переподключить", "ub_reconnect").row()
+        .text("🗑 Удалить сессию", "ub_delete").row()
+        .text("◀️ Назад", "main_menu") }
     );
   } else {
     await ctx.editMessageText(
-      `🤖 <b>UserBot — мониторинг без Premium!</b>\n\n` +
-      `<b>Что это:</b>\n` +
-      `UserBot использует ваши credentials Telegram чтобы\n` +
-      `мониторить ваши переписки — как AyuGram, но через бота.\n\n` +
+      `🤖 <b>UserBot — мониторинг без Telegram Premium</b>\n\n` +
+      `Работает как ваш второй клиент Telegram (аналог AyuGram).\n` +
+      `Вы сами подключаете свой аккаунт — данные хранятся только у вас.\n\n` +
       `<b>Что перехватывает:</b>\n` +
       `✅ Все входящие и исходящие сообщения\n` +
-      `✅ Удалённые сообщения (любой стороной)\n` +
+      `✅ Удалённые сообщения (кем бы ни удалены)\n` +
       `✅ Отредактированные сообщения\n` +
       `✅ Медиа с таймером самоуничтожения ⏱\n` +
-      `✅ Личные чаты, группы, супергруппы\n` +
+      `✅ Личные чаты + группы + супергруппы\n` +
       `❌ Секретные чаты — невозможно (E2E)\n\n` +
-      `<b>Что нужно:</b>\n` +
-      `📱 Ваш номер телефона\n` +
-      `🔑 Код подтверждения из Telegram\n` +
-      `🔒 2FA пароль (если включён)\n\n` +
-      `<b>Безопасность:</b>\n` +
-      `• Сессия хранится только на вашем сервере\n` +
-      `• Никто кроме вас не имеет доступа\n` +
-      `• Можно отключить в любой момент\n\n` +
-      `⚠️ Для работы нужны API_ID и API_HASH от my.telegram.org`,
-      { parse_mode: "HTML", reply_markup: new InlineKeyboard()
-        .text("✅ Подключить UserBot","ub_start_setup").row()
-        .text("◀️ Назад","main_menu") }
+      `<b>Что потребуется:</b>\n` +
+      `🔑 <b>API ID</b> и <b>API Hash</b> — получить на my.telegram.org\n` +
+      `📱 Номер телефона вашего Telegram\n` +
+      `🔐 Код подтверждения + 2FA пароль (если включён)\n\n` +
+      `<b>Как получить API ID и API Hash:</b>\n` +
+      `1. Откройте <a href="https://my.telegram.org">my.telegram.org</a>\n` +
+      `2. Войдите под своим номером\n` +
+      `3. Нажмите «API development tools»\n` +
+      `4. Создайте приложение (любое название)\n` +
+      `5. Скопируйте <b>App api_id</b> и <b>App api_hash</b>`,
+      { parse_mode: "HTML", disable_web_page_preview: true,
+        reply_markup: new InlineKeyboard()
+          .text("✅ Всё готово, подключить", "ub_start_setup").row()
+          .text("◀️ Назад", "main_menu") }
     );
   }
   await ctx.answerCallbackQuery();
@@ -1462,34 +1496,21 @@ bot.callbackQuery("userbot_menu", async ctx => {
 
 bot.callbackQuery("ub_start_setup", async ctx => {
   const uid = ctx.from.id;
-  if (!API_ID || !API_HASH) {
-    await ctx.editMessageText(
-      `⚠️ <b>UserBot не настроен</b>\n\n` +
-      `Администратор не предоставил API_ID и API_HASH.\n\n` +
-      `Для настройки UserBot нужны данные от <b>my.telegram.org</b>:\n` +
-      `1. Перейдите на my.telegram.org\n` +
-      `2. Войдите со своим аккаунтом\n` +
-      `3. Создайте приложение\n` +
-      `4. Скопируйте API_ID и API_HASH\n\n` +
-      `Передайте их администратору @mrztn для активации.`,
-      { parse_mode: "HTML", reply_markup: kbBack("userbot_menu") }
-    );
-    await ctx.answerCallbackQuery();
-    return;
-  }
-  if (!db.prepare("SELECT accepted_ub_terms FROM userbot_sessions WHERE user_id=?").get(uid)?.accepted_ub_terms) {
+  const ub  = db.prepare("SELECT accepted_ub_terms FROM userbot_sessions WHERE user_id=?").get(uid);
+  if (!ub?.accepted_ub_terms) {
     await ctx.editMessageText(
       `📋 <b>Условия UserBot</b>\n\n` +
-      `<b>Я понимаю и соглашаюсь:</b>\n\n` +
-      `1. Мои учётные данные Telegram будут использоваться\n   для входа в мой аккаунт на сервере бота\n\n` +
-      `2. Все мои сообщения будут сохраняться в базе данных\n\n` +
-      `3. Использование UserBot может нарушать ToS Telegram\n   (автоматизация пользовательских аккаунтов)\n\n` +
-      `4. Я несу ответственность за использование\n\n` +
-      `5. Могу отключить в любой момент\n\n` +
-      `⚠️ Администратор @mrztn имеет доступ к серверу`,
+      `Прочитайте и подтвердите:\n\n` +
+      `1️⃣ Вы предоставляете <b>собственные</b> API ID, API Hash и номер телефона\n\n` +
+      `2️⃣ Ваша сессия Telegram будет сохранена в зашифрованной базе данных на сервере бота\n\n` +
+      `3️⃣ Использование UserBot потенциально нарушает ToS Telegram (автоматизация пользовательских аккаунтов) — <b>вы берёте ответственность на себя</b>\n\n` +
+      `4️⃣ Все ваши сообщения будут записываться в базу данных\n\n` +
+      `5️⃣ Администратор <b>@mrztn</b> имеет доступ к серверу, но не к содержимому ваших сообщений напрямую\n\n` +
+      `6️⃣ Вы можете отключить и удалить сессию в любой момент\n\n` +
+      `⚠️ Если вы не согласны — используйте Business API (Telegram Premium).`,
       { parse_mode: "HTML", reply_markup: new InlineKeyboard()
-        .text("✅ Принимаю условия","ub_accept_terms").row()
-        .text("❌ Отмена","userbot_menu") }
+        .text("✅ Принимаю, продолжить", "ub_accept_terms").row()
+        .text("❌ Отмена", "userbot_menu") }
     );
     await ctx.answerCallbackQuery();
     return;
@@ -1499,23 +1520,29 @@ bot.callbackQuery("ub_start_setup", async ctx => {
 });
 
 bot.callbackQuery("ub_accept_terms", async ctx => {
-  const uid = ctx.from.id;
+  const uid      = ctx.from.id;
   const existing = db.prepare("SELECT * FROM userbot_sessions WHERE user_id=?").get(uid);
   if (existing) db.prepare("UPDATE userbot_sessions SET accepted_ub_terms=1 WHERE user_id=?").run(uid);
-  else db.prepare("INSERT INTO userbot_sessions(user_id,accepted_ub_terms) VALUES(?,1)").run(uid);
+  else          db.prepare("INSERT INTO userbot_sessions(user_id,accepted_ub_terms) VALUES(?,1)").run(uid);
   await startUbSetup(ctx, uid);
   await ctx.answerCallbackQuery();
 });
 
 async function startUbSetup(ctx, uid) {
-  setState(uid, "ub_phone");
+  setState(uid, "ub_api_id");
   UB_ST[uid] = {};
   await ctx.editMessageText(
     `🤖 <b>Настройка UserBot</b>\n\n` +
-    `Шаг 1/3: Введите ваш номер телефона Telegram\n\n` +
-    `Формат: <code>+79991234567</code>\n\n` +
-    `<i>Телеграм отправит код подтверждения.</i>`,
-    { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена","userbot_menu") }
+    `<b>Шаг 1 из 4 — API ID</b>\n\n` +
+    `Введите ваш <b>API ID</b> из my.telegram.org\n\n` +
+    `<b>Где взять:</b>\n` +
+    `1. Перейдите на <a href="https://my.telegram.org/auth">my.telegram.org</a>\n` +
+    `2. Войдите под номером вашего Telegram\n` +
+    `3. Нажмите <b>«API development tools»</b>\n` +
+    `4. Скопируйте число <b>App api_id</b>\n\n` +
+    `Пример: <code>12345678</code>`,
+    { parse_mode: "HTML", disable_web_page_preview: true,
+      reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
   );
 }
 
@@ -1537,10 +1564,10 @@ bot.callbackQuery("ub_delete", async ctx => {
 bot.callbackQuery("ub_reconnect", async ctx => {
   const uid = ctx.from.id;
   const ub  = db.prepare("SELECT * FROM userbot_sessions WHERE user_id=?").get(uid);
-  if (!ub || !ub.session_str) { await ctx.answerCallbackQuery("Нет сессии", { show_alert: true }); return; }
+  if (!ub || !ub.session_str || !ub.api_id) { await ctx.answerCallbackQuery("Нет сессии или credentials", { show_alert: true }); return; }
   await ctx.editMessageText("⏳ Переподключаюсь...", { parse_mode: "HTML" });
   try {
-    await launchUserbot(uid, ub.session_str);
+    await launchUserbot(uid, ub.session_str, ub.api_id, ub.api_hash);
     await ctx.editMessageText("✅ <b>UserBot переподключён!</b>", { parse_mode: "HTML", reply_markup: kbBack("userbot_menu") });
   } catch(e) {
     await ctx.editMessageText(`❌ <b>Ошибка:</b> ${e.message}`, { parse_mode: "HTML", reply_markup: kbBack("userbot_menu") });
@@ -1726,32 +1753,85 @@ bot.on("message:text", async ctx => {
 
   const state = getState(uid);
 
-  // --- UserBot phone input ---
+  // --- UserBot: API ID ---
+  if (state === "ub_api_id") {
+    const apiId = parseInt(text.trim());
+    if (isNaN(apiId) || apiId < 1000) {
+      await ctx.reply("❌ Неверный API ID. Это число, например: <code>12345678</code>", { parse_mode: "HTML" });
+      return;
+    }
+    UB_ST[uid] = { ...(UB_ST[uid]||{}), apiId };
+    setState(uid, "ub_api_hash");
+    await ctx.reply(
+      `✅ API ID: <code>${apiId}</code>\n\n` +
+      `<b>Шаг 2 из 4 — API Hash</b>\n\n` +
+      `Теперь введите <b>App api_hash</b> с той же страницы.\n\n` +
+      `Это строка из 32 символов, например:\n<code>a3f9e2b1c8d7a6b5c4d3e2f1a0b9c8d7</code>`,
+      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
+    );
+    return;
+  }
+
+  // --- UserBot: API Hash ---
+  if (state === "ub_api_hash") {
+    const apiHash = text.trim();
+    if (!/^[a-f0-9]{32}$/i.test(apiHash)) {
+      await ctx.reply("❌ Неверный API Hash. Это 32 символа hex, например:\n<code>a3f9e2b1c8d7a6b5c4d3e2f1a0b9c8d7</code>", { parse_mode: "HTML" });
+      return;
+    }
+    UB_ST[uid] = { ...(UB_ST[uid]||{}), apiHash };
+    setState(uid, "ub_phone");
+    await ctx.reply(
+      `✅ API Hash принят.\n\n` +
+      `<b>Шаг 3 из 4 — Номер телефона</b>\n\n` +
+      `Введите ваш номер телефона Telegram:\n\n` +
+      `Формат: <code>+79991234567</code>`,
+      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
+    );
+    return;
+  }
+
+  // --- UserBot: Phone ---
   if (state === "ub_phone") {
     const phone = text.trim();
     if (!/^\+\d{7,15}$/.test(phone)) {
-      await ctx.reply("❌ Неверный формат. Введите номер как <code>+79991234567</code>", { parse_mode: "HTML" });
+      await ctx.reply("❌ Неверный формат. Пример: <code>+79991234567</code>", { parse_mode: "HTML" });
       return;
     }
-    UB_ST[uid] = { phone };
+    const st = UB_ST[uid];
+    if (!st?.apiId || !st?.apiHash) {
+      clearState(uid);
+      await ctx.reply("❌ Сессия устарела. Начните заново через меню UserBot.", { reply_markup: kbMain(uid) });
+      return;
+    }
+    UB_ST[uid].phone = phone;
     try {
-      const client = new TelegramClient(new StringSession(""), API_ID, API_HASH, { connectionRetries: 3, useWSS: false });
+      const client = new TelegramClient(
+        new StringSession(""),
+        st.apiId, st.apiHash,
+        { connectionRetries: 3, useWSS: false, deviceModel: "MerAI", appVersion: "1.0" }
+      );
       await client.connect();
       UB_ST[uid].client = client;
-      const result = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
+      const result = await client.sendCode({ apiId: st.apiId, apiHash: st.apiHash }, phone);
       UB_ST[uid].phoneCodeHash = result.phoneCodeHash;
       setState(uid, "ub_code");
       await ctx.reply(
-        `✅ Код отправлен на ${phone}\n\n<b>Шаг 2/3:</b> Введите код из Telegram\n\nФормат: <code>12345</code>`,
-        { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена","userbot_menu") }
+        `📱 Код отправлен на <b>${phone}</b>\n\n` +
+        `<b>Шаг 4 из 4 — Код подтверждения</b>\n\n` +
+        `Введите код из Telegram (5 цифр):\n` +
+        `Пример: <code>12345</code>\n\n` +
+        `<i>Код действует 5 минут.</i>`,
+        { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
       );
     } catch(e) {
       clearState(uid); delete UB_ST[uid];
-      await ctx.reply(`❌ Ошибка отправки кода: ${e.message}\n\nПроверьте номер и попробуйте снова.`, { reply_markup: kbMain(uid) });
+      await ctx.reply(`❌ Ошибка: ${e.message}\n\nПроверьте API ID, API Hash и номер телефона.`, { reply_markup: kbMain(uid) });
     }
     return;
   }
 
+  // --- UserBot: Code ---
   if (state === "ub_code") {
     const code = text.trim().replace(/\s/g,"");
     const ubs  = UB_ST[uid];
@@ -1761,25 +1841,33 @@ bot.on("message:text", async ctx => {
       const sessStr = ubs.client.session.save();
       const me      = await ubs.client.getMe();
       db.prepare(`
-        INSERT OR REPLACE INTO userbot_sessions(user_id,phone,session_str,is_active,connected_at,tg_user_id,tg_username,accepted_ub_terms)
-        VALUES(?,?,?,1,datetime('now'),?,?,1)
-      `).run(uid, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
+        INSERT OR REPLACE INTO userbot_sessions
+          (user_id, api_id, api_hash, phone, session_str, is_active, connected_at, tg_user_id, tg_username, accepted_ub_terms)
+        VALUES (?,?,?,?,?,1,datetime('now'),?,?,1)
+      `).run(uid, ubs.apiId, ubs.apiHash, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
       delete UB_ST[uid];
       clearState(uid);
       await ubs.client.disconnect();
       await ctx.reply(
-        `🎉 <b>UserBot подключён!</b>\n\nАккаунт: ${me.firstName||"?"} ${me.username?"@"+me.username:""}\nТелефон: ${ubs.phone}\n\nМониторинг запущен. Все удалённые и отредактированные сообщения будут пересылаться вам.`,
+        `🎉 <b>UserBot подключён!</b>\n\n` +
+        `👤 Аккаунт: <b>${me.firstName||"?"}${me.username?" @"+me.username:""}</b>\n` +
+        `📱 Телефон: ${ubs.phone}\n\n` +
+        `✅ Мониторинг запущен!\nВсе удалённые, отредактированные и таймер-медиа будут пересылаться вам.`,
         { parse_mode: "HTML", reply_markup: kbMain(uid) }
       );
-      await launchUserbot(uid, sessStr);
-      try { await bot.api.sendMessage(ADMIN_ID, `🤖 UserBot: ${uid} @${me.username||"—"} подключён`); } catch(e){}
+      await launchUserbot(uid, sessStr, ubs.apiId, ubs.apiHash);
+      try { await bot.api.sendMessage(ADMIN_ID, `🤖 UserBot: uid=${uid} @${me.username||"—"} подключён`); } catch(e){}
     } catch(e) {
       if (e.errorMessage === "SESSION_PASSWORD_NEEDED") {
         setState(uid, "ub_2fa");
-        await ctx.reply("🔐 <b>Требуется 2FA пароль</b>\n\nВведите ваш пароль двухфакторной аутентификации:", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена","userbot_menu") });
+        await ctx.reply(
+          `🔐 <b>Требуется 2FA пароль</b>\n\n` +
+          `Введите пароль двухфакторной аутентификации вашего аккаунта:`,
+          { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
+        );
       } else {
         clearState(uid); delete UB_ST[uid];
-        await ctx.reply(`❌ Неверный код или ошибка: ${e.message}`, { reply_markup: kbMain(uid) });
+        await ctx.reply(`❌ Неверный код: ${e.message}`, { reply_markup: kbMain(uid) });
       }
     }
     return;
@@ -1793,20 +1881,26 @@ bot.on("message:text", async ctx => {
       const sessStr = ubs.client.session.save();
       const me      = await ubs.client.getMe();
       db.prepare(`
-        INSERT OR REPLACE INTO userbot_sessions(user_id,phone,session_str,is_active,connected_at,tg_user_id,tg_username,accepted_ub_terms)
-        VALUES(?,?,?,1,datetime('now'),?,?,1)
-      `).run(uid, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
+        INSERT OR REPLACE INTO userbot_sessions
+          (user_id, api_id, api_hash, phone, session_str, is_active, connected_at, tg_user_id, tg_username, accepted_ub_terms)
+        VALUES (?,?,?,?,?,1,datetime('now'),?,?,1)
+      `).run(uid, ubs.apiId, ubs.apiHash, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
       delete UB_ST[uid];
       clearState(uid);
       await ubs.client.disconnect();
-      await ctx.reply(`🎉 <b>UserBot подключён!</b>\n\n${me.firstName||"?"} @${me.username||"—"}`, { parse_mode: "HTML", reply_markup: kbMain(uid) });
-      await launchUserbot(uid, sessStr);
+      await ctx.reply(
+        `🎉 <b>UserBot подключён!</b>\n\n${me.firstName||"?"} @${me.username||"—"}`,
+        { parse_mode: "HTML", reply_markup: kbMain(uid) }
+      );
+      await launchUserbot(uid, sessStr, ubs.apiId, ubs.apiHash);
+      try { await bot.api.sendMessage(ADMIN_ID, `🤖 UserBot 2FA: uid=${uid} @${me.username||"—"} подключён`); } catch(e){}
     } catch(e) {
       clearState(uid); delete UB_ST[uid];
       await ctx.reply(`❌ Неверный 2FA пароль: ${e.message}`, { reply_markup: kbMain(uid) });
     }
     return;
   }
+
 
   // --- Search ---
   if (state === "search") {
@@ -2187,14 +2281,23 @@ bot.on("deleted_business_messages", async ctx => {
 // ================================================================
 const activeBots = new Map(); // uid → TelegramClient
 
-async function launchUserbot(uid, sessionStr) {
+async function launchUserbot(uid, sessionStr, apiId, apiHash) {
   if (activeBots.has(uid)) {
     try { await activeBots.get(uid).disconnect(); } catch(e){}
     activeBots.delete(uid);
   }
-  if (!API_ID || !API_HASH) return;
+  if (!apiId || !apiHash) {
+    // Попробуем взять из БД
+    const rec = db.prepare("SELECT api_id, api_hash FROM userbot_sessions WHERE user_id=?").get(uid);
+    if (!rec?.api_id || !rec?.api_hash) {
+      console.warn(`[UB] uid=${uid}: нет api_id/api_hash, пропускаем`);
+      return null;
+    }
+    apiId   = rec.api_id;
+    apiHash = rec.api_hash;
+  }
 
-  const client = new TelegramClient(new StringSession(sessionStr), API_ID, API_HASH, {
+  const client = new TelegramClient(new StringSession(sessionStr), apiId, apiHash, {
     connectionRetries: 5,
     retryDelay: 1000,
     useWSS: false,
@@ -2348,11 +2451,10 @@ async function disconnectUserbot(uid) {
 }
 
 async function restoreUserbots() {
-  if (!API_ID || !API_HASH) { console.log("[UB] API_ID/API_HASH не заданы — UserBot недоступен"); return; }
-  const sessions = db.prepare("SELECT * FROM userbot_sessions WHERE is_active=1 AND session_str IS NOT NULL").all();
+  const sessions = db.prepare("SELECT * FROM userbot_sessions WHERE is_active=1 AND session_str IS NOT NULL AND api_id IS NOT NULL").all();
   console.log(`[UB] Восстановление ${sessions.length} сессий...`);
   for (const s of sessions) {
-    try { await launchUserbot(s.user_id, s.session_str); } catch(e) {
+    try { await launchUserbot(s.user_id, s.session_str, s.api_id, s.api_hash); } catch(e) {
       console.error(`[UB] Ошибка uid=${s.user_id}:`, e.message);
       db.prepare("UPDATE userbot_sessions SET is_active=0, error_count=error_count+1, last_error=? WHERE user_id=?").run(e.message, s.user_id);
     }
@@ -2410,7 +2512,7 @@ async function main() {
   console.log(`[DB]  ${DB_PATH}`);
   console.log(`[BOT] ${BOT_TOKEN.slice(0,12)}...`);
   console.log(`[AI]  Groq: ${GROQ_KEY?"✅":"❌"} | Gemini: ${GEMINI_KEY?"✅":"❌"}`);
-  console.log(`[UB]  API_ID: ${API_ID?API_ID:"❌ не задан"}`);
+  console.log(`[UB]  UserBot: каждый пользователь вводит свои API_ID/API_HASH`);
 
   await bot.api.deleteWebhook({ drop_pending_updates: true }).catch(()=>{});
 
@@ -2424,7 +2526,7 @@ async function main() {
       await restoreUserbots();
       try {
         await bot.api.sendMessage(ADMIN_ID,
-          `✅ <b>MerAI запущен</b>\n@${info.username}\n\n🤖 AI: ${GROQ_KEY?"Groq":""}${GEMINI_KEY?" + Gemini":""}\n🔗 UserBot: ${API_ID?"✅ настроен":"❌ нет API_ID"}\n💾 БД: ${DB_PATH}`,
+          `✅ <b>MerAI запущен</b>\n@${info.username}\n\n🤖 AI: ${GROQ_KEY?"Groq":""}${GEMINI_KEY?" + Gemini":""}\n🔗 UserBot: ✅ каждый пользователь вводит свои API-ключи\n💾 БД: ${DB_PATH}`,
           { parse_mode:"HTML" });
       } catch(e){}
     },
