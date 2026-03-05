@@ -3,7 +3,8 @@
 //  MerAI — Monitoring & AI
 //  grammy 1.31 | better-sqlite3 | telegram (gram-js) | archiver | node-cron
 //  Author: mrztn
-//  Fixed version - all critical issues resolved
+//  ТЕСТОВАЯ ВЕРСИЯ С ЗАХАРДКОЖЕННЫМИ CREDENTIALS
+//  ⚠️ ПОСЛЕ ТЕСТИРОВАНИЯ СМЕНИТЕ ВСЕ КЛЮЧИ!
 // ================================================================
 
 const { Bot, InlineKeyboard, InputFile } = require("grammy");
@@ -19,23 +20,27 @@ const { EditedMessage }   = require("telegram/events");
 const input = require("input");
 
 // ================================================================
-//  CONFIG - Читаем из .env БЕЗ дефолтных значений
+//  CONFIG - ЗАХАРДКОЖЕННЫЕ ЗНАЧЕНИЯ ДЛЯ ТЕСТИРОВАНИЯ
+//  ⚠️ ЭТО ТЕСТОВАЯ ВЕРСИЯ - ПОСЛЕ ТЕСТОВ СМЕНИТЕ КЛЮЧИ!
 // ================================================================
-const BOT_TOKEN     = process.env.BOT_TOKEN;
-const GROQ_KEY      = process.env.GROQ_API_KEY || "";
-const GEMINI_KEY    = process.env.GEMINI_API_KEY || "";
-const TG_API_ID     = parseInt(process.env.TG_API_ID || "0");
-const TG_API_HASH   = process.env.TG_API_HASH || "";
+const BOT_TOKEN     = "8505484152:AAHXEFt0lyeMK5ZSJHRYpdPhhFJ0s142Bng";
+const GROQ_KEY      = "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";
+const GEMINI_KEY    = "AIzaSyCJFqu1EHGSHjgJ70XukduT5sFwRmKNmEI";
+const TG_API_ID     = 38362277;
+const TG_API_HASH   = "1e1fbdde4c349760db99c9374adf956e";
 const ADMIN_ID      = 7785371505;
-const DB_PATH       = process.env.DB_PATH || path.join("database", "merai.db");
+const DB_PATH       = path.join("database", "merai.db");
+
+console.log("✅ Credentials загружены из кода (ТЕСТОВАЯ ВЕРСИЯ)");
+console.log("⚠️  ПОСЛЕ ТЕСТИРОВАНИЯ СМЕНИТЕ ВСЕ КЛЮЧИ!");
 
 if (!BOT_TOKEN) {
-  console.error("❌ BOT_TOKEN не найден в .env файле!");
+  console.error("❌ BOT_TOKEN пустой!");
   process.exit(1);
 }
 
 if (!GROQ_KEY && !GEMINI_KEY) {
-  console.warn("⚠️ Ни GROQ_API_KEY, ни GEMINI_API_KEY не найдены - AI не будет работать!");
+  console.warn("⚠️ AI ключи не настроены - работать не будет!");
 }
 
 const PLAN_DAYS  = { starter:7, basic:30, pro:90, premium:365, ultimate:null };
@@ -490,9 +495,9 @@ async function aiSummarize(msgs) {
   ]);
 }
 
-// ================================================================
+// ==============================================================================
 //  МЕДИА СКАЧИВАНИЕ - УЛУЧШЕННАЯ ВЕРСИЯ
-// ================================================================
+// ==============================================================================
 const EXTS = { photo:".jpg", video:".mp4", video_note:".mp4", audio:".ogg", voice:".ogg", document:"", sticker:".webp", animation:".gif" };
 
 async function downloadMedia(fileId, fileUniqueId, mediaType, uid, hasTimer) {
@@ -772,9 +777,9 @@ function kbAI(model) {
 // ================================================================
 const bot = new Bot(BOT_TOKEN);
 
-// ================================================================
+// ================================================================================================
 //  /start
-// ================================================================
+// ================================================================================================
 bot.command("start", async ctx => {
   const uid     = ctx.from.id;
   const args    = (ctx.message.text || "").split(" ");
@@ -796,7 +801,7 @@ bot.command("start", async ctx => {
       `• 🗜 При удалении чата — ZIP-архив всей переписки\n` +
       `• 🤖 AI-ассистент (код, вопросы, анализ) — встроен\n` +
       `• 🔓 UserBot — работает без Telegram Premium\n\n` +
-      `⚠️ Для Business API нужен <b>Telegram Premium</b>.\nDля UserBot — нет.\n\n` +
+      `⚠️ Для Business API нужен <b>Telegram Premium</b>.\nДля UserBot — нет.\n\n` +
       `Прочитайте условия и примите их:`,
       { parse_mode: "HTML", reply_markup: kbTerms() }
     );
@@ -961,9 +966,9 @@ bot.callbackQuery("ai_summary", async ctx => {
   else await bot.api.sendMessage(uid, "❌ Не удалось получить ответ от AI.");
 });
 
-// ================================================================
+// ================================================================================================
 //  STATS
-// ================================================================
+// ================================================================================================
 bot.callbackQuery("stats", async ctx => {
   const uid = ctx.from.id;
   const u   = getUser(uid);
@@ -990,9 +995,9 @@ bot.callbackQuery("stats", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ==================================================================================================
 //  SUBSCRIPTION
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("subscription", async ctx => {
   const u = getUser(ctx.from.id);
   await ctx.editMessageText(
@@ -1049,9 +1054,9 @@ function savePaymentRecord(uid, stars, plan) {
   db.prepare("INSERT INTO payments(user_id,stars,plan) VALUES(?,?,?)").run(uid, stars, plan);
 }
 
-// ================================================================
+// ================================================================================================
 //  SEARCH
-// ================================================================
+// ================================================================================================
 bot.callbackQuery("search", async ctx => {
   setState(ctx.from.id, "search");
   await ctx.editMessageText(
@@ -1065,9 +1070,9 @@ bot.callbackQuery("search", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ================================================================================================
 //  LAST DELETED
-// ================================================================
+// ================================================================================================
 bot.callbackQuery("last_deleted", async ctx => {
   const uid  = ctx.from.id;
   const msgs = db.prepare("SELECT * FROM messages WHERE user_id=? AND is_deleted=1 ORDER BY deleted_at DESC LIMIT 10").all(uid);
@@ -1086,9 +1091,9 @@ bot.callbackQuery("last_deleted", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ==================================================================================================
 //  ANALYTICS
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("analytics", async ctx => {
   await ctx.editMessageText("📈 <b>Аналитика</b>", { parse_mode: "HTML", reply_markup: kbAnalytics() });
   await ctx.answerCallbackQuery();
@@ -1182,9 +1187,9 @@ bot.callbackQuery("an_sources", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ==================================================================================================
 //  GALLERY
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("gallery", async ctx => {
   const uid = ctx.from.id;
   const all = db.prepare("SELECT media_type,COUNT(*) c FROM messages WHERE user_id=? AND media_type IS NOT NULL GROUP BY media_type").all(uid);
@@ -1219,9 +1224,9 @@ bot.callbackQuery("gallery", async ctx => {
   });
 });
 
-// ================================================================
+// ==================================================================================================
 //  EXPORT
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("export_menu", async ctx => {
   await ctx.editMessageText(
     "📤 <b>Экспорт данных</b>\n\nФормат экспорта (последние 200 сообщений):",
@@ -1253,9 +1258,9 @@ bot.callbackQuery("exp_html", ctx => doExport(ctx, "html"));
 bot.callbackQuery("exp_csv",  ctx => doExport(ctx, "csv"));
 bot.callbackQuery("exp_zip",  ctx => doExport(ctx, "zip"));
 
-// ================================================================
+// ==================================================================================================
 //  SETTINGS
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("settings", async ctx => {
   const u = getUser(ctx.from.id);
   if (!u) { await ctx.answerCallbackQuery("❌"); return; }
@@ -1284,9 +1289,9 @@ bot.callbackQuery("cleanup_media", async ctx => {
   await ctx.answerCallbackQuery(`🧹 Удалено: ${cnt} файлов`, { show_alert: true });
 });
 
-// ================================================================
+// ==================================================================================================
 //  REFERRALS
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("referrals", async ctx => {
   const uid  = ctx.from.id;
   const u    = getUser(uid);
@@ -1307,9 +1312,9 @@ bot.callbackQuery("my_stars", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ==================================================================================================
 //  ACHIEVEMENTS
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("achievements", async ctx => {
   const achs = db.prepare("SELECT * FROM achievements WHERE user_id=? ORDER BY unlocked_at DESC").all(ctx.from.id);
   const L    = { first_msg:"💬 Первое сообщение",msg_100:"💬 100 сообщений",msg_1000:"💬 1 000",first_del:"🗑 Первое удаление",del_50:"🗑 50 удалений",first_media:"📸 Первое медиа",ai_user:"🤖 AI-ассистент",level_5:"⭐ Уровень 5",level_10:"⭐ Уровень 10",connected:"🔗 Business API",premium:"👑 Premium",legend:"♾️ Легенда" };
@@ -1347,9 +1352,9 @@ bot.callbackQuery("help", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ==================================================================================================
 //  USERBOT MENU - УПРОЩЕННАЯ ВЕРСИЯ
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("userbot_menu", async ctx => {
   const uid = ctx.from.id;
   const ub  = db.prepare("SELECT * FROM userbot_sessions WHERE user_id=?").get(uid);
@@ -1504,9 +1509,9 @@ bot.callbackQuery("ub_stats", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ==================================================================================================
 //  ADMIN PANEL - С РЕАЛЬНОЙ СТАТИСТИКОЙ
-// ================================================================
+// ==================================================================================================
 bot.callbackQuery("admin", async ctx => {
   if (ctx.from.id !== ADMIN_ID) { await ctx.answerCallbackQuery("🚫"); return; }
   const s = adminStats();
@@ -1661,9 +1666,9 @@ bot.callbackQuery("adm_ubots", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
-// ================================================================
+// ==================================================================================================
 //  MESSAGE HANDLER (AI + состояния + UserBot setup)
-// ================================================================
+// ==================================================================================================
 bot.on("message:text", async ctx => {
   const uid   = ctx.from.id;
   const text  = ctx.message.text || "";
@@ -1871,9 +1876,9 @@ bot.on("message:text", async ctx => {
   }
 });
 
-// ================================================================
+// ==================================================================================================
 //  COMMANDS
-// ================================================================
+// ==================================================================================================
 bot.command("help",   async ctx => { await ctx.reply("Нажмите /start для открытия меню", { reply_markup: kbMain(ctx.from.id) }); });
 bot.command("level",  async ctx => {
   const u = getUser(ctx.from.id); if (!u) { await ctx.reply("/start"); return; }
@@ -1912,9 +1917,9 @@ bot.command("unkw", async ctx => {
   await ctx.reply(`✅ Ключевое слово удалено`);
 });
 
-// ================================================================
+// ==================================================================================================
 //  BUSINESS API HANDLERS
-// ================================================================
+// ==================================================================================================
 bot.on("business_connection", async ctx => {
   try {
     const bc = ctx.update.business_connection;
@@ -2117,9 +2122,9 @@ bot.on("deleted_business_messages", async ctx => {
   } catch(e) { console.error("[deleted_business_messages]", e.message); }
 });
 
-// ================================================================
+// ==================================================================================================
 //  USERBOT (gram-js)
-// ================================================================
+// ==================================================================================================
 const activeBots = new Map();
 
 async function launchUserbot(uid, sessionStr) {
@@ -2290,9 +2295,9 @@ async function restoreUserbots() {
   }
 }
 
-// ================================================================
+// ==================================================================================================
 //  CRON
-// ================================================================
+// ==================================================================================================
 cron.schedule("0 8 * * *", async () => {
   const yesterday = new Date(Date.now()-86400000).toISOString().slice(0,10);
   const users = db.prepare("SELECT * FROM users WHERE digest_enabled=1 AND is_blocked=0").all();
@@ -2317,12 +2322,12 @@ cron.schedule("0 3 * * *", () => {
   } catch(e) { console.error("[BACKUP] ❌", e.message); }
 });
 
-// ================================================================
+// ==================================================================================================
 //  ЗАПУСК
-// ================================================================
+// ==================================================================================================
 async function main() {
   console.log("=".repeat(60));
-  console.log("  MerAI — Monitoring & AI (FIXED VERSION)");
+  console.log("  MerAI — Monitoring & AI (ТЕСТОВАЯ ВЕРСИЯ)");
   console.log("=".repeat(60));
   console.log(`[DB]  ${DB_PATH}`);
   console.log(`[BOT] ${BOT_TOKEN.slice(0,12)}...`);
@@ -2341,7 +2346,7 @@ async function main() {
       const stats = adminStats();
       try {
         await bot.api.sendMessage(ADMIN_ID,
-          `✅ <b>MerAI запущен (FIXED)</b>\n@${info.username}\n\n` +
+          `✅ <b>MerAI запущен (ТЕСТОВАЯ ВЕРСИЯ)</b>\n@${info.username}\n\n` +
           `👥 Пользователей: ${fmt(stats.users)}\n` +
           `🤖 AI: ${GROQ_KEY?"Groq":""}${GEMINI_KEY?" + Gemini":""}\n` +
           `🔗 UserBot: ${TG_API_ID && TG_API_HASH?"✅":"❌"}\n` +
