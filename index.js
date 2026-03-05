@@ -24,6 +24,7 @@ const input = require("input");
 //  CONFIG - ЗАХАРДКОЖЕННЫЕ ЗНАЧЕНИЯ ДЛЯ ТЕСТИРОВАНИЯ
 //  ⚠️ ЭТО ТЕСТОВАЯ ВЕРСИЯ - ПОСЛЕ ТЕСТОВ СМЕНИТЕ КЛЮЧИ!
 // ================================================================
+
 const BOT_TOKEN     = "8505484152:AAHXEFt0lyeMK5ZSJHRYpdPhhFJ0s142Bng";
 
 // БЕСПЛАТНЫЕ AI ПРОВАЙДЕРЫ - автоматически выберет рабочий
@@ -1090,6 +1091,7 @@ bot.callbackQuery("ai_chat", async ctx => {
   await ctx.answerCallbackQuery();
 });
 
+bot.callbackQuery("ai_clear", async ctx => {
   updateUser(ctx.from.id, { ai_context: "[]" });
   await ctx.answerCallbackQuery("🗑 Контекст очищен!");
   try { await ctx.editMessageReplyMarkup({ reply_markup: kbAI() }); } catch(e){}
@@ -1099,7 +1101,7 @@ bot.callbackQuery("ai_summary", async ctx => {
   const uid  = ctx.from.id;
   const msgs = searchMsgs(uid, { limit: 30 });
   if (!msgs.length) { await ctx.answerCallbackQuery("Сообщений нет", { show_alert: true }); return; }
-  if (!GROQ_KEY && !GEMINI_KEY) { await ctx.answerCallbackQuery("⚠️ AI не настроен", { show_alert: true }); return; }
+  if (!GEMINI_KEY && !OPENROUTER_KEY && !TOGETHER_KEY && !DEEPSEEK_KEY && !GROQ_KEY) { await ctx.answerCallbackQuery("⚠️ AI не настроен", { show_alert: true }); return; }
   await ctx.answerCallbackQuery("⏳ Анализирую...");
   const result = await aiSummarize(msgs);
   if (result) await bot.api.sendMessage(uid, `🤖 <b>AI-резюме последних диалогов:</b>\n\n${result}`, { parse_mode: "HTML", reply_markup: kbAI() });
@@ -1394,9 +1396,9 @@ async function doExport(ctx, type) {
     }
   } catch(e) { await ctx.api.sendMessage(uid, "❌ " + e.message.slice(0,200)); }
 }
-bot.callbackQuery("exp_html", ctx => doExport(ctx, "html"));
-bot.callbackQuery("exp_csv",  ctx => doExport(ctx, "csv"));
-bot.callbackQuery("exp_zip",  ctx => doExport(ctx, "zip"));
+bot.callbackQuery("exp_html", async ctx => await doExport(ctx, "html"));
+bot.callbackQuery("exp_csv", async ctx => await doExport(ctx, "csv"));
+bot.callbackQuery("exp_zip", async ctx => await doExport(ctx, "zip"));
 
 // ==================================================================================================
 //  SETTINGS
@@ -2067,7 +2069,7 @@ bot.on("message:text", async ctx => {
   }
 
   // --- AI ОТВЕТ (основной режим) ---
-  if (!GROQ_KEY && !GEMINI_KEY) {
+  if (!GEMINI_KEY && !OPENROUTER_KEY && !TOGETHER_KEY && !DEEPSEEK_KEY && !GROQ_KEY) {
     await ctx.reply("⚠️ AI-ключи не настроены. Обратитесь к @mrztn", { reply_markup: kbMain(uid) });
     return;
   }
