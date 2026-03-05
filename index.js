@@ -26,11 +26,13 @@ const input = require("input");
 // ================================================================
 const BOT_TOKEN     = "8505484152:AAHXEFt0lyeMK5ZSJHRYpdPhhFJ0s142Bng";
 
-// БЕСПЛАТНЫЕ AI ПРОВАЙДЕРЫ (приоритет сверху вниз)
-const DEEPSEEK_KEY  = "sk-de6711e104ad469e91df88297c43fe09";  // DeepSeek - БЕСПЛАТНЫЙ! https://platform.deepseek.com
-const HF_KEY        = "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";  // Hugging Face - БЕСПЛАТНЫЙ! https://huggingface.co/settings/tokens
-const GROQ_KEY      = "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";
-const GEMINI_KEY    = "AIzaSyCJFqu1EHGSHjgJ70XukduT5sFwRmKNmEI";
+// БЕСПЛАТНЫЕ AI ПРОВАЙДЕРЫ - автоматически выберет рабочий
+// Оставьте пустыми те, которые не хотите использовать
+const OPENROUTER_KEY = "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";  // OpenRouter - БЕСПЛАТНЫЙ! https://openrouter.ai/keys
+const TOGETHER_KEY   = "key_CYk2G5Tv1QYrUjySPBAJm";  // Together AI - БЕСПЛАТНЫЙ! https://api.together.xyz/settings/api-keys  
+const GEMINI_KEY     = "AIzaSyCJFqu1EHGSHjgJ70XukduT5sFwRmKNmEI";  // Google Gemini
+const GROQ_KEY       = "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";  // Groq (если есть)
+const DEEPSEEK_KEY   = "sk-de6711e104ad469e91df88297c43fe09";  // DeepSeek (если есть)
 
 const TG_API_ID     = 38362277;
 const TG_API_HASH   = "1e1fbdde4c349760db99c9374adf956e";
@@ -456,14 +458,118 @@ const MERAI_SYSTEM = `Ты MerAI — мощный AI-ассистент и эк�
 • Используй актуальные паттерны 2025 года`;
 
 async function callAI(messages) {
-  console.log(`[AI] Попытка вызова AI...`);
+  console.log(`[AI] 🤖 Ищу рабочий AI провайдер...`);
   
-  // Приоритет: DeepSeek → HuggingFace → Groq → Gemini
+  // Автоматически выбирает первый рабочий провайдер
   
-  // 1. DeepSeek - БЕСПЛАТНЫЙ, БЫСТРЫЙ (deepseek-chat)
+  // 1. Google Gemini - РАБОТАЕТ ВСЕГДА (бесплатный лимит)
+  if (GEMINI_KEY) {
+    try {
+      console.log(`[AI] 🔮 Пробую Google Gemini...`);
+      
+      const sys = messages.find(m => m.role === "system");
+      const contents = messages.filter(m => m.role !== "system").map(m => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
+      
+      // ИСПРАВЛЕНО: gemini-1.5-flash (стабильная рабочая модель)
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system_instruction: sys ? { parts: [{ text: sys.content }] } : undefined,
+            contents,
+            generationConfig: { maxOutputTokens: 2000, temperature: 0.7 },
+          }),
+          signal: AbortSignal.timeout(30000),
+        }
+      );
+      
+      if (r.ok) {
+        const data = await r.json();
+        const response = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (response) {
+          console.log(`[AI] ✅ Gemini работает! Ответ: ${response.length} символов`);
+          return response;
+        }
+      }
+      const err = await r.text();
+      console.log(`[AI] ❌ Gemini (${r.status}): ${err.slice(0, 100)}`);
+    } catch(e) { 
+      console.log(`[AI] ⚠️ Gemini ошибка: ${e.message}`); 
+    }
+  }
+  
+  // 2. OpenRouter - БЕСПЛАТНЫЙ
+  if (OPENROUTER_KEY) {
+    try {
+      console.log(`[AI] 🌐 Пробую OpenRouter (бесплатный)...`);
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENROUTER_KEY}`,
+          "HTTP-Referer": "https://t.me/merai_bbot"
+        },
+        body: JSON.stringify({
+          model: "meta-llama/llama-3.2-3b-instruct:free",
+          messages,
+          max_tokens: 1500,
+          temperature: 0.7,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      
+      if (r.ok) {
+        const data = await r.json();
+        const response = data.choices?.[0]?.message?.content;
+        if (response) {
+          console.log(`[AI] ✅ OpenRouter работает!`);
+          return response;
+        }
+      }
+      console.log(`[AI] ❌ OpenRouter: ${r.status}`);
+    } catch(e) { console.log(`[AI] ⚠️ OpenRouter: ${e.message}`); }
+  }
+  
+  // 3. Together AI - БЕСПЛАТНЫЙ
+  if (TOGETHER_KEY) {
+    try {
+      console.log(`[AI] 🤝 Пробую Together AI (бесплатный)...`);
+      const r = await fetch("https://api.together.xyz/v1/chat/completions", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${TOGETHER_KEY}`
+        },
+        body: JSON.stringify({
+          model: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+          messages,
+          max_tokens: 1500,
+          temperature: 0.7,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      
+      if (r.ok) {
+        const data = await r.json();
+        const response = data.choices?.[0]?.message?.content;
+        if (response) {
+          console.log(`[AI] ✅ Together AI работает!`);
+          return response;
+        }
+      }
+      console.log(`[AI] ❌ Together: ${r.status}`);
+    } catch(e) { console.log(`[AI] ⚠️ Together: ${e.message}`); }
+  }
+  
+  // 4. DeepSeek - если есть баланс
   if (DEEPSEEK_KEY) {
     try {
-      console.log(`[AI] 🚀 Пробую DeepSeek (бесплатный)...`);
+      console.log(`[AI] 🚀 Пробую DeepSeek...`);
       const r = await fetch("https://api.deepseek.com/v1/chat/completions", {
         method: "POST",
         headers: { 
@@ -474,78 +580,24 @@ async function callAI(messages) {
           model: "deepseek-chat",
           messages,
           max_tokens: 2000,
-          temperature: 0.3,
+          temperature: 0.7,
         }),
         signal: AbortSignal.timeout(30000),
       });
       
-      console.log(`[AI] DeepSeek ответ: ${r.status}`);
-      
       if (r.ok) {
         const data = await r.json();
-        const response = data.choices[0].message.content;
-        console.log(`[AI] ✅ DeepSeek успех! ${response.length} символов`);
-        return response;
-      }
-      
-      const err = await r.text();
-      console.error(`[AI] ❌ DeepSeek ${r.status}:`, err.slice(0, 200));
-    } catch(e) { 
-      console.warn(`[AI] ⚠️ DeepSeek ошибка:`, e.message); 
-    }
-  }
-  
-  // 2. Hugging Face - БЕСПЛАТНЫЙ (meta-llama/Meta-Llama-3-8B-Instruct)
-  if (HF_KEY) {
-    try {
-      console.log(`[AI] 🤗 Пробую Hugging Face (бесплатный)...`);
-      
-      // Конвертируем формат сообщений
-      const prompt = messages.map(m => {
-        if (m.role === "system") return `System: ${m.content}`;
-        if (m.role === "user") return `User: ${m.content}`;
-        return `Assistant: ${m.content}`;
-      }).join("\n\n") + "\n\nAssistant:";
-      
-      const r = await fetch(
-        "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct",
-        {
-          method: "POST",
-          headers: { 
-            "Authorization": `Bearer ${HF_KEY}`,
-            "Content-Type": "application/json" 
-          },
-          body: JSON.stringify({
-            inputs: prompt,
-            parameters: {
-              max_new_tokens: 1000,
-              temperature: 0.3,
-              return_full_text: false
-            }
-          }),
-          signal: AbortSignal.timeout(40000),
-        }
-      );
-      
-      console.log(`[AI] HuggingFace ответ: ${r.status}`);
-      
-      if (r.ok) {
-        const data = await r.json();
-        const response = Array.isArray(data) ? data[0].generated_text : data.generated_text || data[0]?.generated_text || "";
+        const response = data.choices?.[0]?.message?.content;
         if (response) {
-          console.log(`[AI] ✅ HuggingFace успех! ${response.length} символов`);
-          return response.trim();
+          console.log(`[AI] ✅ DeepSeek работает!`);
+          return response;
         }
       }
-      
-      const err = await r.text();
-      console.error(`[AI] ❌ HuggingFace ${r.status}:`, err.slice(0, 200));
-    } catch(e) { 
-      console.warn(`[AI] ⚠️ HuggingFace ошибка:`, e.message); 
-    }
+      console.log(`[AI] ❌ DeepSeek: ${r.status}`);
+    } catch(e) { console.log(`[AI] ⚠️ DeepSeek: ${e.message}`); }
   }
   
-  // 3. Groq - БЫСТРЫЙ (llama-3.3-70b-versatile)
+  // 5. Groq - если есть ключ
   if (GROQ_KEY) {
     try {
       console.log(`[AI] ⚡ Пробую Groq...`);
@@ -559,84 +611,28 @@ async function callAI(messages) {
           model: "llama-3.3-70b-versatile",
           messages,
           max_tokens: 2000,
-          temperature: 0.3,
+          temperature: 0.7,
         }),
         signal: AbortSignal.timeout(30000),
       });
       
-      console.log(`[AI] Groq ответ: ${r.status}`);
-      
       if (r.ok) {
         const data = await r.json();
-        const response = data.choices[0].message.content;
-        console.log(`[AI] ✅ Groq успех! ${response.length} символов`);
-        return response;
-      }
-      
-      const err = await r.text();
-      console.error(`[AI] ❌ Groq ${r.status}:`, err.slice(0, 200));
-      
-      if (r.status === 403) {
-        console.error(`[AI] 🚫 Groq ключ заблокирован! Получите новый: https://console.groq.com`);
-      }
-    } catch(e) { 
-      console.warn(`[AI] ⚠️ Groq ошибка:`, e.message); 
-    }
-  }
-  
-  // 4. Gemini - GOOGLE (gemini-2.0-flash)
-  if (GEMINI_KEY) {
-    try {
-      console.log(`[AI] 🔮 Пробую Gemini...`);
-      
-      const sys = messages.find(m => m.role === "system");
-      const contents = messages.filter(m => m.role !== "system").map(m => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
-      
-      // ИСПРАВЛЕНО: используем gemini-2.0-flash вместо gemini-2.0-flash-exp
-      const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            system_instruction: sys ? { parts: [{ text: sys.content }] } : undefined,
-            contents,
-            generationConfig: { 
-              maxOutputTokens: 2000, 
-              temperature: 0.3 
-            },
-          }),
-          signal: AbortSignal.timeout(30000),
-        }
-      );
-      
-      console.log(`[AI] Gemini ответ: ${r.status}`);
-      
-      if (r.ok) {
-        const data = await r.json();
-        const response = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const response = data.choices?.[0]?.message?.content;
         if (response) {
-          console.log(`[AI] ✅ Gemini успех! ${response.length} символов`);
+          console.log(`[AI] ✅ Groq работает!`);
           return response;
         }
       }
-      
-      const err = await r.text();
-      console.error(`[AI] ❌ Gemini ${r.status}:`, err.slice(0, 300));
-      
-      if (r.status === 404) {
-        console.error(`[AI] 🚫 Модель Gemini не найдена! Проверьте доступные модели.`);
-      }
-    } catch(e) { 
-      console.warn(`[AI] ⚠️ Gemini ошибка:`, e.message); 
-    }
+      console.log(`[AI] ❌ Groq: ${r.status}`);
+    } catch(e) { console.log(`[AI] ⚠️ Groq: ${e.message}`); }
   }
   
-  console.error("[AI] ❌ ВСЕ провайдеры недоступны!");
-  console.error("[AI] 💡 Получите БЕСПЛАТНЫЙ ключ DeepSeek: https://platform.deepseek.com");
+  console.error("[AI] ❌ НИ ОДИН провайдер не работает!");
+  console.error("[AI] 💡 Gemini ключ есть, но API не отвечает");
+  console.error("[AI] 💡 Получите БЕСПЛАТНЫЙ ключ:");
+  console.error("[AI]    • OpenRouter: https://openrouter.ai/keys");
+  console.error("[AI]    • Together: https://api.together.xyz/settings/api-keys");
   return null;
 }
 
@@ -919,10 +915,8 @@ const kbAdmin = () => new InlineKeyboard()
   .text("📢 Рассылка",       "adm_bcast").text("🤖 UserBots",   "adm_ubots").row()
   .text("◀️ Назад", "main_menu");
 
-function kbAI(model) {
-  const models = { groq:"Groq Llama", gemini:"Gemini 2.0" };
+function kbAI() {
   return new InlineKeyboard()
-    .text(`🔀 Модель: ${models[model]||model}`, "ai_model").row()
     .text("🗑 Очистить историю", "ai_clear").row()
     .text("📊 Резюме переписки", "ai_summary").row()
     .text("◀️ Назад", "main_menu");
@@ -1091,24 +1085,14 @@ bot.callbackQuery("ai_chat", async ctx => {
     `• Задай любой вопрос\n` +
     `• Анализ переписки — «Резюме переписки»\n\n` +
     `<i>Работает без подписки, всегда доступен.</i>`,
-    { parse_mode: "HTML", reply_markup: kbAI(model) }
+    { parse_mode: "HTML", reply_markup: kbAI() }
   );
   await ctx.answerCallbackQuery();
 });
 
-bot.callbackQuery("ai_model", async ctx => {
-  const u     = getUser(ctx.from.id);
-  const cur   = u?.ai_model || "groq";
-  const next  = cur === "groq" ? "gemini" : "groq";
-  updateUser(ctx.from.id, { ai_model: next });
-  await ctx.answerCallbackQuery(`✅ Переключено: ${next}`);
-  try { await ctx.editMessageReplyMarkup({ reply_markup: kbAI(next) }); } catch(e){}
-});
-
-bot.callbackQuery("ai_clear", async ctx => {
   updateUser(ctx.from.id, { ai_context: "[]" });
   await ctx.answerCallbackQuery("🗑 Контекст очищен!");
-  try { await ctx.editMessageReplyMarkup({ reply_markup: kbAI(getUser(ctx.from.id)?.ai_model || "groq") }); } catch(e){}
+  try { await ctx.editMessageReplyMarkup({ reply_markup: kbAI() }); } catch(e){}
 });
 
 bot.callbackQuery("ai_summary", async ctx => {
@@ -1118,7 +1102,7 @@ bot.callbackQuery("ai_summary", async ctx => {
   if (!GROQ_KEY && !GEMINI_KEY) { await ctx.answerCallbackQuery("⚠️ AI не настроен", { show_alert: true }); return; }
   await ctx.answerCallbackQuery("⏳ Анализирую...");
   const result = await aiSummarize(msgs);
-  if (result) await bot.api.sendMessage(uid, `🤖 <b>AI-резюме последних диалогов:</b>\n\n${result}`, { parse_mode: "HTML", reply_markup: kbAI(getUser(uid)?.ai_model||"groq") });
+  if (result) await bot.api.sendMessage(uid, `🤖 <b>AI-резюме последних диалогов:</b>\n\n${result}`, { parse_mode: "HTML", reply_markup: kbAI() });
   else await bot.api.sendMessage(uid, "❌ Не удалось получить ответ от AI.");
 });
 
