@@ -3,6 +3,7 @@
 //  MerAI — Monitoring & AI
 //  grammy 1.31 | better-sqlite3 | telegram (gram-js) | archiver | node-cron
 //  Author: mrztn
+//  Fixed version - all critical issues resolved
 // ================================================================
 
 const { Bot, InlineKeyboard, InputFile } = require("grammy");
@@ -15,17 +16,27 @@ const { TelegramClient }  = require("telegram");
 const { StringSession }   = require("telegram/sessions");
 const { NewMessage }      = require("telegram/events");
 const { EditedMessage }   = require("telegram/events");
-const input = require("input"); // only used as fallback; we handle input via bot
+const input = require("input");
 
 // ================================================================
-//  CONFIG
+//  CONFIG - Читаем из .env БЕЗ дефолтных значений
 // ================================================================
-const BOT_TOKEN     = process.env.BOT_TOKEN   || "8505484152:AAHXEFt0lyeMK5ZSJHRYpdPhhFJ0s142Bng";
-const GROQ_KEY      = process.env.GROQ_API_KEY  || "";
+const BOT_TOKEN     = process.env.BOT_TOKEN;
+const GROQ_KEY      = process.env.GROQ_API_KEY || "";
 const GEMINI_KEY    = process.env.GEMINI_API_KEY || "";
-// UserBot: каждый пользователь вводит свои API_ID и API_HASH от my.telegram.org
+const TG_API_ID     = parseInt(process.env.TG_API_ID || "0");
+const TG_API_HASH   = process.env.TG_API_HASH || "";
 const ADMIN_ID      = 7785371505;
 const DB_PATH       = process.env.DB_PATH || path.join("database", "merai.db");
+
+if (!BOT_TOKEN) {
+  console.error("❌ BOT_TOKEN не найден в .env файле!");
+  process.exit(1);
+}
+
+if (!GROQ_KEY && !GEMINI_KEY) {
+  console.warn("⚠️ Ни GROQ_API_KEY, ни GEMINI_API_KEY не найдены - AI не будет работать!");
+}
 
 const PLAN_DAYS  = { starter:7, basic:30, pro:90, premium:365, ultimate:null };
 const PLAN_STARS = { starter:100, basic:250, pro:600, premium:2000, ultimate:5000 };
@@ -138,16 +149,6 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at     TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS vip_contacts (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id     INTEGER NOT NULL,
-  sender_id   INTEGER NOT NULL,
-  sender_name TEXT,
-  note        TEXT,
-  added_at    TEXT DEFAULT (datetime('now')),
-  UNIQUE(user_id, sender_id)
-);
-
 CREATE TABLE IF NOT EXISTS blocklist (
   user_id   INTEGER,
   sender_id INTEGER,
@@ -193,11 +194,8 @@ CREATE TABLE IF NOT EXISTS activity (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Userbot: сессии пользователей (у каждого свои api_id / api_hash)
 CREATE TABLE IF NOT EXISTS userbot_sessions (
   user_id       INTEGER PRIMARY KEY,
-  api_id        INTEGER,
-  api_hash      TEXT,
   phone         TEXT,
   session_str   TEXT,
   is_active     INTEGER DEFAULT 0,
@@ -307,10 +305,6 @@ function isScam(text) {
   return SCAM_WORDS.some(w => t.includes(w));
 }
 
-function isVip(uid, senderId) {
-  return !!db.prepare("SELECT 1 FROM vip_contacts WHERE user_id=? AND sender_id=?").get(uid, senderId);
-}
-
 function getConn(connId) {
   return db.prepare("SELECT * FROM connections WHERE connection_id=?").get(connId) || null;
 }
@@ -325,7 +319,7 @@ function saveMsg(uid, connId, source, chatId, msgId, senderId, senderUsername, s
 
   const cat  = categorize(text || caption || "");
   const imp  = Math.min(
-    (mediaType ? 15 : 0) + (hasTimer ? 25 : 0) + (isVip(uid, senderId||0) ? 30 : 0) +
+    (mediaType ? 15 : 0) + (hasTimer ? 25 : 0) +
     Math.min(Math.floor(((text||"").length)/30), 20) +
     (/срочно|важно|urgent/i.test(text||"") ? 15 : 0), 100
   );
@@ -453,6 +447,8 @@ async function callAI(messages) {
         signal: AbortSignal.timeout(30000),
       });
       if (r.ok) return (await r.json()).choices[0].message.content;
+      const err = await r.text();
+      console.error("[AI Groq Error]", r.status, err);
     } catch(e) { console.warn("[AI Groq]", e.message); }
   }
   if (GEMINI_KEY) {
@@ -476,6 +472,8 @@ async function callAI(messages) {
         }
       );
       if (r.ok) return (await r.json()).candidates[0].content.parts[0].text;
+      const err = await r.text();
+      console.error("[AI Gemini Error]", r.status, err);
     } catch(e) { console.warn("[AI Gemini]", e.message); }
   }
   return null;
@@ -493,7 +491,7 @@ async function aiSummarize(msgs) {
 }
 
 // ================================================================
-//  МЕДИА СКАЧИВАНИЕ
+//  МЕДИА СКАЧИВАНИЕ - УЛУЧШЕННАЯ ВЕРСИЯ
 // ================================================================
 const EXTS = { photo:".jpg", video:".mp4", video_note:".mp4", audio:".ogg", voice:".ogg", document:"", sticker:".webp", animation:".gif" };
 
@@ -501,14 +499,17 @@ async function downloadMedia(fileId, fileUniqueId, mediaType, uid, hasTimer) {
   try {
     if (fileUniqueId) {
       const ex = db.prepare("SELECT file_path FROM messages WHERE file_unique_id=? AND file_path IS NOT NULL LIMIT 1").get(fileUniqueId);
-      if (ex && ex.file_path && fs.existsSync(ex.file_path)) return ex.file_path;
+      if (ex && ex.file_path && fs.existsSync(ex.file_path)) {
+        console.log(`[MEDIA] Дубликат найден: ${ex.file_path}`);
+        return ex.file_path;
+      }
     }
 
     const fileInfo = await bot.api.getFile(fileId);
     if (!fileInfo.file_path) throw new Error("file_path empty");
 
     const url  = `https://api.telegram.org/file/bot${BOT_TOKEN}/${fileInfo.file_path}`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(45000) });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
     const ext  = path.extname(fileInfo.file_path) || EXTS[mediaType] || ".bin";
@@ -517,10 +518,14 @@ async function downloadMedia(fileId, fileUniqueId, mediaType, uid, hasTimer) {
     const hash = crypto.createHash("md5").update(fileId).digest("hex").slice(0, 8);
     const pref = hasTimer ? "timer_" : "";
     const fp   = path.join(dir, `${pref}${mediaType}_${Date.now()}_${hash}${ext}`);
-    fs.writeFileSync(fp, Buffer.from(await resp.arrayBuffer()));
+    
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    fs.writeFileSync(fp, buffer);
+    
+    console.log(`[MEDIA] ✅ Скачано: ${fp} (${(buffer.length/1024).toFixed(1)} KB)`);
     return fp;
   } catch(e) {
-    console.warn(`[MEDIA] ${mediaType} ${fileId.slice(0,20)}: ${e.message}`);
+    console.error(`[MEDIA] ❌ ${mediaType} ${fileId.slice(0,20)}: ${e.message}`);
     return null;
   }
 }
@@ -685,8 +690,6 @@ async function checkAchievements(uid) {
   if (u.user_level >= 5)        await notif("level_5",     "⭐","Уровень 5");
   if (u.user_level >= 10)       await notif("level_10",    "⭐","Уровень 10");
   if (conns >= 1)               await notif("connected",   "🔗","Business подключён");
-  const vips = db.prepare("SELECT COUNT(*) c FROM vip_contacts WHERE user_id=?").get(uid)?.c || 0;
-  if (vips >= 3)                await notif("vip_3",       "🌟","3 VIP-контакта");
   if (["premium","ultimate"].includes(u.subscription_type)) await notif("premium", "👑","Premium-подписчик");
   if (u.subscription_type === "ultimate") await notif("legend", "♾️","Легенда");
 }
@@ -699,7 +702,6 @@ const setState   = (uid, s) => { ST[uid] = s; };
 const getState   = uid => ST[uid] || null;
 const clearState = uid => { delete ST[uid]; };
 
-// Userbot состояния (отдельно, т.к. многошаговые)
 const UB_ST = {};
 
 // ================================================================
@@ -714,11 +716,10 @@ function kbMain(uid) {
     .text("💬 AI-ассистент",  "ai_chat"   ).text("📊 Статистика",  "stats"      ).row()
     .text("💎 Подписка",      "subscription").text("⭐ Stars",      "my_stars"   ).row()
     .text("🔍 Поиск",         "search"    ).text("🗑 Удалённые",   "last_deleted").row()
-    .text("🌟 VIP-контакты",  "vip_menu"  ).text("📈 Аналитика",  "analytics"  ).row()
-    .text("🖼 Галерея",        "gallery"   ).text("📤 Экспорт",    "export_menu").row()
-    .text("⚙️ Настройки",     "settings"  ).text("👥 Рефералы",   "referrals"  ).row()
-    .text("🤖 UserBot",       "userbot_menu").text("🏆 Достижения","achievements").row()
-    .text("ℹ️ Помощь",        "help"      ).text("💳 Оплаты",     "payments"   );
+    .text("📈 Аналитика",     "analytics" ).text("🖼 Галерея",     "gallery"    ).row()
+    .text("📤 Экспорт",       "export_menu").text("👥 Рефералы",   "referrals"  ).row()
+    .text("⚙️ Настройки",     "settings"  ).text("🤖 UserBot",     "userbot_menu").row()
+    .text("🏆 Достижения",    "achievements").text("ℹ️ Помощь",   "help"       );
   if (Number(uid) === ADMIN_ID) kb.row().text("👨‍💼 Админ", "admin");
   return kb;
 }
@@ -835,13 +836,13 @@ bot.callbackQuery("show_terms", async ctx => {
     `✅ UserBot: личные чаты, группы (где вы участник)\n\n` +
     `<b>Тарифы Business API:</b>\n` +
     `🎁 Пробный 3 дня — бесплатно (при подключении)\n` +
-    `🌟 Starter 7д — ${PLAN_STARS.starter}⭐ (~${PLAN_RUB.starter}₽)\n` +
-    `💎 Basic 1мес — ${PLAN_STARS.basic}⭐ (~${PLAN_RUB.basic}₽)\n` +
-    `💼 Pro 3мес — ${PLAN_STARS.pro}⭐ (~${PLAN_RUB.pro}₽) 🔥\n` +
-    `👑 Premium 1год — ${PLAN_STARS.premium}⭐ (~${PLAN_RUB.premium}₽) 🔥\n` +
-    `♾️ Ultimate навсегда — ${PLAN_STARS.ultimate}⭐ 💥\n\n` +
+    `🌟 Starter — ${PLAN_STARS.starter}⭐ / 7 дней\n` +
+    `💎 Basic — ${PLAN_STARS.basic}⭐ / месяц\n` +
+    `💼 Pro — ${PLAN_STARS.pro}⭐ / 3 мес 🔥 −20%\n` +
+    `👑 Premium — ${PLAN_STARS.premium}⭐ / год 🔥 −33%\n` +
+    `♾️ Ultimate — ${PLAN_STARS.ultimate}⭐ навсегда 💥\n\n` +
     `🤖 <b>UserBot — бесплатно!</b> Только ваши credentials.\n\n` +
-    `Покупка в рублях: @mrztn`,
+    `💰 В рублях: @mrztn`,
     { parse_mode: "HTML", reply_markup: kbTerms() }
   );
   await ctx.answerCallbackQuery();
@@ -860,7 +861,7 @@ bot.callbackQuery("accept_terms", async ctx => {
     `<b>2️⃣ UserBot</b> — без Telegram Premium\n` +
     `Работает как ваш второй клиент (как AyuGram).\n` +
     `Мониторит личные чаты и группы.\n` +
-    `Требует: ваш номер телефона + API-ключи\n\n` +
+    `Требует: ваш номер телефона + код подтверждения\n\n` +
     `<b>💬 AI-ассистент</b> — бесплатно, без подключения.\nПросто напишите мне любой вопрос!`,
     { parse_mode: "HTML", reply_markup: new InlineKeyboard()
       .text("🔗 Business API (Premium)", "how_business").row()
@@ -874,7 +875,6 @@ bot.callbackQuery("accept_terms", async ctx => {
 // ================================================================
 //  MAIN MENU
 // ================================================================
-// Инструкция Business API
 bot.callbackQuery("how_business", async ctx => {
   await ctx.editMessageText(
     `🔗 <b>Подключение через Business API</b>\n\n` +
@@ -969,7 +969,6 @@ bot.callbackQuery("stats", async ctx => {
   const u   = getUser(uid);
   if (!u) { await ctx.answerCallbackQuery("❌"); return; }
   const conns  = db.prepare("SELECT COUNT(*) c FROM connections WHERE user_id=?").get(uid)?.c || 0;
-  const vips   = db.prepare("SELECT COUNT(*) c FROM vip_contacts WHERE user_id=?").get(uid)?.c || 0;
   const nextXp = u.user_level * u.user_level * 100;
   const toNext = Math.max(0, nextXp - u.xp);
   const ub     = db.prepare("SELECT is_active FROM userbot_sessions WHERE user_id=?").get(uid);
@@ -984,7 +983,6 @@ bot.callbackQuery("stats", async ctx => {
     `🗑 Удалений поймано: <b>${fmt(u.total_deletions)}</b>\n` +
     `✏️ Правок поймано: <b>${fmt(u.total_edits)}</b>\n` +
     `📸 Медиафайлов: <b>${fmt(u.total_media)}</b>\n` +
-    `🌟 VIP-контактов: <b>${vips}</b>\n` +
     `🤖 AI-запросов: ${u.ai_requests}\n\n` +
     `⭐ Stars: ${u.stars_balance} | Реф. бонус: ${u.referral_earnings}`,
     { parse_mode: "HTML", reply_markup: kbBack() }
@@ -1052,78 +1050,6 @@ function savePaymentRecord(uid, stars, plan) {
 }
 
 // ================================================================
-//  VIP
-// ================================================================
-bot.callbackQuery("vip_menu", async ctx => {
-  const uid  = ctx.from.id;
-  const vips = db.prepare("SELECT * FROM vip_contacts WHERE user_id=? ORDER BY added_at DESC").all(uid);
-  let text   = `🌟 <b>VIP-контакты</b>\n\nVIP-контакты отмечаются 🔴 в уведомлениях.\n\n`;
-  if (vips.length) {
-    vips.forEach((v, i) => {
-      text += `${i+1}. <b>${v.sender_name||"?"}</b> (<code>${v.sender_id}</code>)\n`;
-      if (v.note) text += `   📝 ${v.note}\n`;
-    });
-    text += `\nУдалить: <code>/unvip ID</code>`;
-  } else { text += `Пока нет. Добавить: <code>/vip ID [заметка]</code>`; }
-  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kbBack() });
-  await ctx.answerCallbackQuery();
-});
-
-// VIP быстрые кнопки из уведомлений
-bot.callbackQuery(/^qa_vip_(\d+)$/, async ctx => {
-  const sid = parseInt(ctx.match[1]), uid = ctx.from.id;
-  const ex  = db.prepare("SELECT sender_name FROM messages WHERE user_id=? AND sender_id=? LIMIT 1").get(uid, sid);
-  db.prepare("INSERT OR REPLACE INTO vip_contacts(user_id,sender_id,sender_name) VALUES(?,?,?)").run(uid, sid, ex?.sender_name||null);
-  await ctx.answerCallbackQuery(`✅ Добавлен в VIP!`, { show_alert: true });
-  try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("❌ Убрать VIP", `qa_unvip_${sid}`).text("👤 Профиль", `qa_profile_${sid}`) }); } catch(e){}
-});
-
-bot.callbackQuery(/^qa_unvip_(\d+)$/, async ctx => {
-  db.prepare("DELETE FROM vip_contacts WHERE user_id=? AND sender_id=?").run(ctx.from.id, parseInt(ctx.match[1]));
-  await ctx.answerCallbackQuery("❌ Удалён из VIP");
-  try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("🌟 +VIP", `qa_vip_${ctx.match[1]}`).text("👤 Профиль", `qa_profile_${ctx.match[1]}`) }); } catch(e){}
-});
-
-bot.callbackQuery(/^qa_profile_(\d+)$/, async ctx => {
-  const uid = ctx.from.id, sid = parseInt(ctx.match[1]);
-  const p = db.prepare(`
-    SELECT sender_id, sender_name, sender_username,
-      COUNT(*) total, SUM(is_deleted) deleted, SUM(is_edited) edited,
-      SUM(has_timer) timers, SUM(is_scam) scam,
-      MIN(created_at) first_msg, MAX(created_at) last_msg
-    FROM messages WHERE user_id=? AND sender_id=? GROUP BY sender_id
-  `).get(uid, sid);
-  if (!p) { await ctx.answerCallbackQuery("Нет данных"); return; }
-  const vipMark = isVip(uid, sid) ? " 🌟 VIP" : "";
-  await ctx.answerCallbackQuery();
-  await bot.api.sendMessage(uid,
-    `👤 <b>${p.sender_name||"?"}${vipMark}</b>\n` +
-    `ID: <code>${sid}</code>${p.sender_username ? "\n@"+p.sender_username : ""}\n\n` +
-    `💬 Сообщений: ${p.total||0}\n🗑 Удалений: ${p.deleted||0}\n✏️ Правок: ${p.edited||0}\n` +
-    `⏱ Таймер-медиа: ${p.timers||0}\n⚠️ Скам: ${p.scam||0}\n\n` +
-    `📅 Первое: ${(p.first_msg||"").slice(0,10)}\n📅 Последнее: ${(p.last_msg||"").slice(0,10)}`,
-    { parse_mode: "HTML", reply_markup: new InlineKeyboard()
-      .text(isVip(uid,sid) ? "❌ VIP" : "🌟 +VIP", isVip(uid,sid) ? `qa_unvip_${sid}` : `qa_vip_${sid}`)
-      .text("🔍 Сообщения", `search_sender_${sid}`) }
-  );
-});
-
-bot.callbackQuery(/^search_sender_(\d+)$/, async ctx => {
-  const uid = ctx.from.id, sid = parseInt(ctx.match[1]);
-  const msgs = db.prepare("SELECT * FROM messages WHERE user_id=? AND sender_id=? ORDER BY created_at DESC LIMIT 10").all(uid, sid);
-  let text = `🔍 <b>Сообщения от #${sid}</b>:\n\n`;
-  msgs.forEach(m => {
-    const ts   = (m.created_at||"").slice(0,16).replace("T"," ");
-    const snip = short(m.text||m.caption||"", 70);
-    const fl   = `${m.is_deleted?"🗑":""}${m.is_edited?"✏️":""}${m.has_timer?"⏱":""}`;
-    text += `${fl}[${ts}]\n${snip||"[медиа]"}\n\n`;
-  });
-  if (!msgs.length) text += "Нет сообщений.";
-  await ctx.answerCallbackQuery();
-  await bot.api.sendMessage(uid, text, { parse_mode: "HTML" });
-});
-
-// ================================================================
 //  SEARCH
 // ================================================================
 bot.callbackQuery("search", async ctx => {
@@ -1153,7 +1079,7 @@ bot.callbackQuery("last_deleted", async ctx => {
     const from = m.sender_name||m.sender_username||`#${m.sender_id}`;
     const snip = short(m.text||m.caption||"", 80);
     const mt   = m.media_type ? ico[m.media_type]||"📎" : "";
-    const fl   = `${m.has_timer?"⏱":""}${isVip(uid,m.sender_id)?"🌟":""}`;
+    const fl   = m.has_timer?"⏱":"";
     text += `${i+1}. <b>${from}</b>${fl}\n${mt}${mt?" ":""}${ts}\n${snip?snip+"\n":""}\n`;
   });
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔄 Обновить","last_deleted").row().text("◀️ Назад","main_menu") });
@@ -1193,8 +1119,7 @@ bot.callbackQuery("an_contacts", async ctx => {
   if (!cts.length) text += "Нет данных.";
   else cts.forEach((c,i) => {
     const name = c.sender_name||c.sender_username||`#${c.sender_id}`;
-    const vip  = isVip(ctx.from.id, c.sender_id) ? " 🌟" : "";
-    text += `${i+1}. <b>${name}</b>${vip}\n   💬 ${c.t} | 🗑 ${c.d||0} | ⏱ ${c.ti||0}\n\n`;
+    text += `${i+1}. <b>${name}</b>\n   💬 ${c.t} | 🗑 ${c.d||0} | ⏱ ${c.ti||0}\n\n`;
   });
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kbBack("analytics") });
   await ctx.answerCallbackQuery();
@@ -1387,19 +1312,10 @@ bot.callbackQuery("my_stars", async ctx => {
 // ================================================================
 bot.callbackQuery("achievements", async ctx => {
   const achs = db.prepare("SELECT * FROM achievements WHERE user_id=? ORDER BY unlocked_at DESC").all(ctx.from.id);
-  const L    = { first_msg:"💬 Первое сообщение",msg_100:"💬 100 сообщений",msg_1000:"💬 1 000",first_del:"🗑 Первое удаление",del_50:"🗑 50 удалений",first_media:"📸 Первое медиа",ai_user:"🤖 AI-ассистент",level_5:"⭐ Уровень 5",level_10:"⭐ Уровень 10",connected:"🔗 Business API",vip_3:"🌟 3 VIP-контакта",premium:"👑 Premium",legend:"♾️ Легенда" };
+  const L    = { first_msg:"💬 Первое сообщение",msg_100:"💬 100 сообщений",msg_1000:"💬 1 000",first_del:"🗑 Первое удаление",del_50:"🗑 50 удалений",first_media:"📸 Первое медиа",ai_user:"🤖 AI-ассистент",level_5:"⭐ Уровень 5",level_10:"⭐ Уровень 10",connected:"🔗 Business API",premium:"👑 Premium",legend:"♾️ Легенда" };
   let text = `🏆 <b>Достижения</b> (${achs.length}):\n\n`;
   if (!achs.length) text += "Пока нет. Используйте бота!";
   else achs.forEach(a => { text += `${L[a.code]||a.code} — ${(a.unlocked_at||"").slice(0,10)}\n`; });
-  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kbBack() });
-  await ctx.answerCallbackQuery();
-});
-
-bot.callbackQuery("payments", async ctx => {
-  const pays = db.prepare("SELECT * FROM payments WHERE user_id=? ORDER BY created_at DESC LIMIT 20").all(ctx.from.id);
-  let text = "💳 <b>История платежей</b>\n\n";
-  if (!pays.length) text += "Платежей нет.";
-  else pays.forEach(p => { text += `• ${(p.created_at||"").slice(0,10)} — <b>${p.plan}</b> (${p.stars} ⭐)\n`; });
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kbBack() });
   await ctx.answerCallbackQuery();
 });
@@ -1417,10 +1333,8 @@ bot.callbackQuery("help", async ctx => {
     `🗑 Удалено → текст + файл сразу\n` +
     `✏️ Изменено → было / стало\n` +
     `⏱ Таймер → перехват до просмотра\n` +
-    `⚠️ Скам → мгновенное предупреждение\n` +
-    `🌟 VIP → приоритетный алерт 🔴\n\n` +
+    `⚠️ Скам → мгновенное предупреждение\n\n` +
     `<b>Команды:</b>\n` +
-    `/vip ID — добавить VIP\n/unvip ID — убрать VIP\n` +
     `/block ID — блок отправителя\n/unblock ID — разблок\n` +
     `/kw слово — добавить ключевое слово\n/unkw слово — убрать\n` +
     `/level — уровень и XP\n/ach — достижения\n\n` +
@@ -1434,11 +1348,26 @@ bot.callbackQuery("help", async ctx => {
 });
 
 // ================================================================
-//  USERBOT MENU
+//  USERBOT MENU - УПРОЩЕННАЯ ВЕРСИЯ
 // ================================================================
 bot.callbackQuery("userbot_menu", async ctx => {
   const uid = ctx.from.id;
   const ub  = db.prepare("SELECT * FROM userbot_sessions WHERE user_id=?").get(uid);
+  
+  if (!TG_API_ID || !TG_API_HASH) {
+    await ctx.editMessageText(
+      `🤖 <b>UserBot</b>\n\n` +
+      `❌ <b>UserBot не настроен</b>\n\n` +
+      `Для работы UserBot требуется:\n` +
+      `• TG_API_ID\n` +
+      `• TG_API_HASH\n\n` +
+      `Обратитесь к администратору @mrztn`,
+      { parse_mode: "HTML", reply_markup: kbBack() }
+    );
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  
   if (ub && ub.is_active) {
     await ctx.editMessageText(
       `🤖 <b>UserBot</b>\n\n` +
@@ -1466,8 +1395,7 @@ bot.callbackQuery("userbot_menu", async ctx => {
   } else {
     await ctx.editMessageText(
       `🤖 <b>UserBot — мониторинг без Telegram Premium</b>\n\n` +
-      `Работает как ваш второй клиент Telegram (аналог AyuGram).\n` +
-      `Вы сами подключаете свой аккаунт — данные хранятся только у вас.\n\n` +
+      `Работает как ваш второй клиент Telegram (аналог AyuGram).\n\n` +
       `<b>Что перехватывает:</b>\n` +
       `✅ Все входящие и исходящие сообщения\n` +
       `✅ Удалённые сообщения (кем бы ни удалены)\n` +
@@ -1476,19 +1404,12 @@ bot.callbackQuery("userbot_menu", async ctx => {
       `✅ Личные чаты + группы + супергруппы\n` +
       `❌ Секретные чаты — невозможно (E2E)\n\n` +
       `<b>Что потребуется:</b>\n` +
-      `🔑 <b>API ID</b> и <b>API Hash</b> — получить на my.telegram.org\n` +
       `📱 Номер телефона вашего Telegram\n` +
       `🔐 Код подтверждения + 2FA пароль (если включён)\n\n` +
-      `<b>Как получить API ID и API Hash:</b>\n` +
-      `1. Откройте <a href="https://my.telegram.org">my.telegram.org</a>\n` +
-      `2. Войдите под своим номером\n` +
-      `3. Нажмите «API development tools»\n` +
-      `4. Создайте приложение (любое название)\n` +
-      `5. Скопируйте <b>App api_id</b> и <b>App api_hash</b>`,
-      { parse_mode: "HTML", disable_web_page_preview: true,
-        reply_markup: new InlineKeyboard()
-          .text("✅ Всё готово, подключить", "ub_start_setup").row()
-          .text("◀️ Назад", "main_menu") }
+      `<i>API ID и API Hash уже настроены администратором</i>`,
+      { parse_mode: "HTML", reply_markup: new InlineKeyboard()
+        .text("✅ Подключить", "ub_start_setup").row()
+        .text("◀️ Назад", "main_menu") }
     );
   }
   await ctx.answerCallbackQuery();
@@ -1501,11 +1422,11 @@ bot.callbackQuery("ub_start_setup", async ctx => {
     await ctx.editMessageText(
       `📋 <b>Условия UserBot</b>\n\n` +
       `Прочитайте и подтвердите:\n\n` +
-      `1️⃣ Вы предоставляете <b>собственные</b> API ID, API Hash и номер телефона\n\n` +
-      `2️⃣ Ваша сессия Telegram будет сохранена в зашифрованной базе данных на сервере бота\n\n` +
+      `1️⃣ Вы предоставляете <b>свой номер телефона</b>\n\n` +
+      `2️⃣ Ваша сессия Telegram будет сохранена в базе данных на сервере\n\n` +
       `3️⃣ Использование UserBot потенциально нарушает ToS Telegram (автоматизация пользовательских аккаунтов) — <b>вы берёте ответственность на себя</b>\n\n` +
       `4️⃣ Все ваши сообщения будут записываться в базу данных\n\n` +
-      `5️⃣ Администратор <b>@mrztn</b> имеет доступ к серверу, но не к содержимому ваших сообщений напрямую\n\n` +
+      `5️⃣ Администратор <b>@mrztn</b> имеет доступ к серверу\n\n` +
       `6️⃣ Вы можете отключить и удалить сессию в любой момент\n\n` +
       `⚠️ Если вы не согласны — используйте Business API (Telegram Premium).`,
       { parse_mode: "HTML", reply_markup: new InlineKeyboard()
@@ -1529,20 +1450,14 @@ bot.callbackQuery("ub_accept_terms", async ctx => {
 });
 
 async function startUbSetup(ctx, uid) {
-  setState(uid, "ub_api_id");
+  setState(uid, "ub_phone");
   UB_ST[uid] = {};
   await ctx.editMessageText(
     `🤖 <b>Настройка UserBot</b>\n\n` +
-    `<b>Шаг 1 из 4 — API ID</b>\n\n` +
-    `Введите ваш <b>API ID</b> из my.telegram.org\n\n` +
-    `<b>Где взять:</b>\n` +
-    `1. Перейдите на <a href="https://my.telegram.org/auth">my.telegram.org</a>\n` +
-    `2. Войдите под номером вашего Telegram\n` +
-    `3. Нажмите <b>«API development tools»</b>\n` +
-    `4. Скопируйте число <b>App api_id</b>\n\n` +
-    `Пример: <code>12345678</code>`,
-    { parse_mode: "HTML", disable_web_page_preview: true,
-      reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
+    `<b>Шаг 1 из 2 — Номер телефона</b>\n\n` +
+    `Введите ваш номер телефона Telegram:\n\n` +
+    `Формат: <code>+79991234567</code>`,
+    { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
   );
 }
 
@@ -1564,10 +1479,10 @@ bot.callbackQuery("ub_delete", async ctx => {
 bot.callbackQuery("ub_reconnect", async ctx => {
   const uid = ctx.from.id;
   const ub  = db.prepare("SELECT * FROM userbot_sessions WHERE user_id=?").get(uid);
-  if (!ub || !ub.session_str || !ub.api_id) { await ctx.answerCallbackQuery("Нет сессии или credentials", { show_alert: true }); return; }
+  if (!ub || !ub.session_str) { await ctx.answerCallbackQuery("Нет сессии", { show_alert: true }); return; }
   await ctx.editMessageText("⏳ Переподключаюсь...", { parse_mode: "HTML" });
   try {
-    await launchUserbot(uid, ub.session_str, ub.api_id, ub.api_hash);
+    await launchUserbot(uid, ub.session_str);
     await ctx.editMessageText("✅ <b>UserBot переподключён!</b>", { parse_mode: "HTML", reply_markup: kbBack("userbot_menu") });
   } catch(e) {
     await ctx.editMessageText(`❌ <b>Ошибка:</b> ${e.message}`, { parse_mode: "HTML", reply_markup: kbBack("userbot_menu") });
@@ -1590,17 +1505,20 @@ bot.callbackQuery("ub_stats", async ctx => {
 });
 
 // ================================================================
-//  ADMIN PANEL
+//  ADMIN PANEL - С РЕАЛЬНОЙ СТАТИСТИКОЙ
 // ================================================================
 bot.callbackQuery("admin", async ctx => {
   if (ctx.from.id !== ADMIN_ID) { await ctx.answerCallbackQuery("🚫"); return; }
   const s = adminStats();
   await ctx.editMessageText(
     `👨‍💼 <b>Админ-панель</b>\n\n` +
-    `👥 Пользователей: <b>${s.users}</b> | Активных: <b>${s.active}</b>\n` +
+    `👥 Всего пользователей: <b>${fmt(s.users)}</b>\n` +
+    `✅ Активных подписок: <b>${s.active}</b>\n` +
     `🤖 UserBot активных: <b>${s.ub_users}</b>\n\n` +
-    `💬 Сообщений: ${fmt(s.messages)} | 🗑 ${fmt(s.deleted)}\n` +
-    `⏱ Таймер-медиа: ${fmt(s.timer)}\n` +
+    `💬 Сообщений: ${fmt(s.messages)}\n` +
+    `🗑 Удалений: ${fmt(s.deleted)}\n` +
+    `✏️ Правок: ${fmt(s.edited)}\n` +
+    `⏱ Таймер-медиа: ${fmt(s.timer)}\n\n` +
     `💰 Stars собрано: ${fmt(s.stars)} ⭐`,
     { parse_mode: "HTML", reply_markup: kbAdmin() }
   );
@@ -1616,7 +1534,11 @@ bot.callbackQuery("adm_stats", async ctx => {
   const tdMsg = db.prepare("SELECT COUNT(*) c FROM messages WHERE DATE(created_at)=?").get(today)?.c||0;
   const tdUsr = db.prepare("SELECT COUNT(*) c FROM users WHERE DATE(registered_at)=?").get(today)?.c||0;
   await ctx.editMessageText(
-    `📊 <b>Детальная статистика</b>\n\nСегодня: +${tdUsr} юзеров, +${tdMsg} сообщений\n\n<b>По планам:</b>\n${pl}\n\n<b>Контент:</b>\n💬 ${fmt(s.messages)} | 🗑 ${fmt(s.deleted)} | ✏️ ${fmt(s.edited)} | ⏱ ${fmt(s.timer)}`,
+    `📊 <b>Детальная статистика</b>\n\n` +
+    `<b>Всего пользователей:</b> ${fmt(s.users)}\n` +
+    `Сегодня: +${tdUsr} юзеров, +${tdMsg} сообщений\n\n` +
+    `<b>По планам:</b>\n${pl}\n\n` +
+    `<b>Контент:</b>\n💬 ${fmt(s.messages)} | 🗑 ${fmt(s.deleted)} | ✏️ ${fmt(s.edited)} | ⏱ ${fmt(s.timer)}`,
     { parse_mode: "HTML", reply_markup: kbBack("admin") }
   );
   await ctx.answerCallbackQuery();
@@ -1634,7 +1556,7 @@ async function showUsersPage(ctx, page) {
   const total = db.prepare("SELECT COUNT(*) c FROM users").get().c;
   const pages = Math.max(1, Math.ceil(total/PAGE));
   const em    = {free:"🆓",trial:"🎁",starter:"🌟",basic:"💎",pro:"💼",premium:"👑",ultimate:"♾️"};
-  let text    = `👥 <b>Пользователи</b> (${page+1}/${pages})\n\n`;
+  let text    = `👥 <b>Пользователи</b> (${page+1}/${pages})\n<b>Всего: ${fmt(total)}</b>\n\n`;
   const kb    = new InlineKeyboard();
   users.forEach((u, i) => {
     const idx = page*PAGE+i+1;
@@ -1753,44 +1675,6 @@ bot.on("message:text", async ctx => {
 
   const state = getState(uid);
 
-  // --- UserBot: API ID ---
-  if (state === "ub_api_id") {
-    const apiId = parseInt(text.trim());
-    if (isNaN(apiId) || apiId < 1000) {
-      await ctx.reply("❌ Неверный API ID. Это число, например: <code>12345678</code>", { parse_mode: "HTML" });
-      return;
-    }
-    UB_ST[uid] = { ...(UB_ST[uid]||{}), apiId };
-    setState(uid, "ub_api_hash");
-    await ctx.reply(
-      `✅ API ID: <code>${apiId}</code>\n\n` +
-      `<b>Шаг 2 из 4 — API Hash</b>\n\n` +
-      `Теперь введите <b>App api_hash</b> с той же страницы.\n\n` +
-      `Это строка из 32 символов, например:\n<code>a3f9e2b1c8d7a6b5c4d3e2f1a0b9c8d7</code>`,
-      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
-    );
-    return;
-  }
-
-  // --- UserBot: API Hash ---
-  if (state === "ub_api_hash") {
-    const apiHash = text.trim();
-    if (!/^[a-f0-9]{32}$/i.test(apiHash)) {
-      await ctx.reply("❌ Неверный API Hash. Это 32 символа hex, например:\n<code>a3f9e2b1c8d7a6b5c4d3e2f1a0b9c8d7</code>", { parse_mode: "HTML" });
-      return;
-    }
-    UB_ST[uid] = { ...(UB_ST[uid]||{}), apiHash };
-    setState(uid, "ub_phone");
-    await ctx.reply(
-      `✅ API Hash принят.\n\n` +
-      `<b>Шаг 3 из 4 — Номер телефона</b>\n\n` +
-      `Введите ваш номер телефона Telegram:\n\n` +
-      `Формат: <code>+79991234567</code>`,
-      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Отмена", "userbot_menu") }
-    );
-    return;
-  }
-
   // --- UserBot: Phone ---
   if (state === "ub_phone") {
     const phone = text.trim();
@@ -1798,27 +1682,23 @@ bot.on("message:text", async ctx => {
       await ctx.reply("❌ Неверный формат. Пример: <code>+79991234567</code>", { parse_mode: "HTML" });
       return;
     }
-    const st = UB_ST[uid];
-    if (!st?.apiId || !st?.apiHash) {
-      clearState(uid);
-      await ctx.reply("❌ Сессия устарела. Начните заново через меню UserBot.", { reply_markup: kbMain(uid) });
-      return;
-    }
-    UB_ST[uid].phone = phone;
+    
+    UB_ST[uid] = { phone };
+    
     try {
       const client = new TelegramClient(
         new StringSession(""),
-        st.apiId, st.apiHash,
+        TG_API_ID, TG_API_HASH,
         { connectionRetries: 3, useWSS: false, deviceModel: "MerAI", appVersion: "1.0" }
       );
       await client.connect();
       UB_ST[uid].client = client;
-      const result = await client.sendCode({ apiId: st.apiId, apiHash: st.apiHash }, phone);
+      const result = await client.sendCode({ apiId: TG_API_ID, apiHash: TG_API_HASH }, phone);
       UB_ST[uid].phoneCodeHash = result.phoneCodeHash;
       setState(uid, "ub_code");
       await ctx.reply(
         `📱 Код отправлен на <b>${phone}</b>\n\n` +
-        `<b>Шаг 4 из 4 — Код подтверждения</b>\n\n` +
+        `<b>Шаг 2 из 2 — Код подтверждения</b>\n\n` +
         `Введите код из Telegram (5 цифр):\n` +
         `Пример: <code>12345</code>\n\n` +
         `<i>Код действует 5 минут.</i>`,
@@ -1826,7 +1706,7 @@ bot.on("message:text", async ctx => {
       );
     } catch(e) {
       clearState(uid); delete UB_ST[uid];
-      await ctx.reply(`❌ Ошибка: ${e.message}\n\nПроверьте API ID, API Hash и номер телефона.`, { reply_markup: kbMain(uid) });
+      await ctx.reply(`❌ Ошибка: ${e.message}\n\nПроверьте номер телефона.`, { reply_markup: kbMain(uid) });
     }
     return;
   }
@@ -1842,9 +1722,9 @@ bot.on("message:text", async ctx => {
       const me      = await ubs.client.getMe();
       db.prepare(`
         INSERT OR REPLACE INTO userbot_sessions
-          (user_id, api_id, api_hash, phone, session_str, is_active, connected_at, tg_user_id, tg_username, accepted_ub_terms)
-        VALUES (?,?,?,?,?,1,datetime('now'),?,?,1)
-      `).run(uid, ubs.apiId, ubs.apiHash, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
+          (user_id, phone, session_str, is_active, connected_at, tg_user_id, tg_username, accepted_ub_terms)
+        VALUES (?,?,?,1,datetime('now'),?,?,1)
+      `).run(uid, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
       delete UB_ST[uid];
       clearState(uid);
       await ubs.client.disconnect();
@@ -1855,7 +1735,7 @@ bot.on("message:text", async ctx => {
         `✅ Мониторинг запущен!\nВсе удалённые, отредактированные и таймер-медиа будут пересылаться вам.`,
         { parse_mode: "HTML", reply_markup: kbMain(uid) }
       );
-      await launchUserbot(uid, sessStr, ubs.apiId, ubs.apiHash);
+      await launchUserbot(uid, sessStr);
       try { await bot.api.sendMessage(ADMIN_ID, `🤖 UserBot: uid=${uid} @${me.username||"—"} подключён`); } catch(e){}
     } catch(e) {
       if (e.errorMessage === "SESSION_PASSWORD_NEEDED") {
@@ -1882,9 +1762,9 @@ bot.on("message:text", async ctx => {
       const me      = await ubs.client.getMe();
       db.prepare(`
         INSERT OR REPLACE INTO userbot_sessions
-          (user_id, api_id, api_hash, phone, session_str, is_active, connected_at, tg_user_id, tg_username, accepted_ub_terms)
-        VALUES (?,?,?,?,?,1,datetime('now'),?,?,1)
-      `).run(uid, ubs.apiId, ubs.apiHash, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
+          (user_id, phone, session_str, is_active, connected_at, tg_user_id, tg_username, accepted_ub_terms)
+        VALUES (?,?,?,1,datetime('now'),?,?,1)
+      `).run(uid, ubs.phone, sessStr, me.id?.toString()||null, me.username||null);
       delete UB_ST[uid];
       clearState(uid);
       await ubs.client.disconnect();
@@ -1892,7 +1772,7 @@ bot.on("message:text", async ctx => {
         `🎉 <b>UserBot подключён!</b>\n\n${me.firstName||"?"} @${me.username||"—"}`,
         { parse_mode: "HTML", reply_markup: kbMain(uid) }
       );
-      await launchUserbot(uid, sessStr, ubs.apiId, ubs.apiHash);
+      await launchUserbot(uid, sessStr);
       try { await bot.api.sendMessage(ADMIN_ID, `🤖 UserBot 2FA: uid=${uid} @${me.username||"—"} подключён`); } catch(e){}
     } catch(e) {
       clearState(uid); delete UB_ST[uid];
@@ -1900,7 +1780,6 @@ bot.on("message:text", async ctx => {
     }
     return;
   }
-
 
   // --- Search ---
   if (state === "search") {
@@ -1966,10 +1845,8 @@ bot.on("message:text", async ctx => {
     return;
   }
 
-  // Показываем действие "печатает"
   try { await ctx.replyWithChatAction("typing"); } catch(e){}
 
-  // Загружаем историю контекста
   let history = [];
   try { history = JSON.parse(u.ai_context || "[]"); } catch(e){}
   history.push({ role: "user", content: text });
@@ -2008,22 +1885,10 @@ bot.command("level",  async ctx => {
 bot.command("ach", async ctx => {
   const achs = db.prepare("SELECT * FROM achievements WHERE user_id=? ORDER BY unlocked_at DESC").all(ctx.from.id);
   if (!achs.length) { await ctx.reply("🏆 Пока нет достижений!"); return; }
-  const L = {first_msg:"💬 Первое сообщение",msg_100:"💬 100 сообщений",msg_1000:"💬 1 000",first_del:"🗑 Первое удаление",del_50:"🗑 50 удалений",first_media:"📸 Первое медиа",ai_user:"🤖 AI-ассистент",level_5:"⭐ Уровень 5",level_10:"⭐ Уровень 10",connected:"🔗 Business API",vip_3:"🌟 3 VIP",premium:"👑 Premium",legend:"♾️ Легенда"};
+  const L = {first_msg:"💬 Первое сообщение",msg_100:"💬 100 сообщений",msg_1000:"💬 1 000",first_del:"🗑 Первое удаление",del_50:"🗑 50 удалений",first_media:"📸 Первое медиа",ai_user:"🤖 AI-ассистент",level_5:"⭐ Уровень 5",level_10:"⭐ Уровень 10",connected:"🔗 Business API",premium:"👑 Premium",legend:"♾️ Легенда"};
   await ctx.reply(`🏆 <b>Достижения</b> (${achs.length}):\n\n`+achs.map(a=>`${L[a.code]||a.code} — ${(a.unlocked_at||"").slice(0,10)}`).join("\n"), { parse_mode:"HTML" });
 });
-bot.command("vip", async ctx => {
-  const p = (ctx.message.text||"").split(/\s+/); if (p.length<2) { await ctx.reply("Использование: /vip ID [заметка]"); return; }
-  const sid=parseInt(p[1]); if (isNaN(sid)) { await ctx.reply("❌ Неверный ID"); return; }
-  const ex=db.prepare("SELECT sender_name FROM messages WHERE user_id=? AND sender_id=? LIMIT 1").get(ctx.from.id,sid);
-  db.prepare("INSERT OR REPLACE INTO vip_contacts(user_id,sender_id,sender_name,note) VALUES(?,?,?,?)").run(ctx.from.id,sid,ex?.sender_name||null,p.slice(2).join(" ")||null);
-  await ctx.reply(`✅ <code>${sid}</code> добавлен в VIP${ex?.sender_name?" ("+ex.sender_name+")":""}`, { parse_mode:"HTML" });
-});
-bot.command("unvip", async ctx => {
-  const p=(ctx.message.text||"").split(/\s+/); if(p.length<2){await ctx.reply("Использование: /unvip ID");return;}
-  const sid=parseInt(p[1]);if(isNaN(sid)){await ctx.reply("❌");return;}
-  db.prepare("DELETE FROM vip_contacts WHERE user_id=? AND sender_id=?").run(ctx.from.id,sid);
-  await ctx.reply(`✅ <code>${sid}</code> удалён из VIP`,{parse_mode:"HTML"});
-});
+
 bot.command("block", async ctx => {
   const p=(ctx.message.text||"").split(/\s+/);if(p.length<2){await ctx.reply("Использование: /block ID");return;}
   const sid=parseInt(p[1]);if(isNaN(sid)){await ctx.reply("❌");return;}
@@ -2049,10 +1914,7 @@ bot.command("unkw", async ctx => {
 
 // ================================================================
 //  BUSINESS API HANDLERS
-//  CRITICAL: ctx.update.* — НЕ ctx.message
 // ================================================================
-
-// Подключение Business-бота
 bot.on("business_connection", async ctx => {
   try {
     const bc = ctx.update.business_connection;
@@ -2078,7 +1940,6 @@ bot.on("business_connection", async ctx => {
   } catch(e) { console.error("[business_connection]", e.message); }
 });
 
-// Входящее/исходящее сообщение
 bot.on("business_message", async ctx => {
   try {
     const msg = ctx.update.business_message;
@@ -2086,15 +1947,12 @@ bot.on("business_message", async ctx => {
     const conn = getConn(msg.business_connection_id);
     if (!conn) return;
 
-    // uid = ВЛАДЕЛЕЦ соединения, ВСЕГДА
     const uid      = conn.user_id;
     const senderId = msg.from?.id || 0;
 
     if (!checkSub(uid)) return;
     if (db.prepare("SELECT 1 FROM blocklist WHERE user_id=? AND sender_id=?").get(uid, senderId)) return;
 
-    // Разбор медиа + таймеры
-    // В Telegram Bot API view-once = has_media_spoiler на объекте Message
     const isViewOnce = !!msg.has_media_spoiler;
     let mediaType = null, fileId = null, fileUniqueId = null, hasTimer = isViewOnce;
 
@@ -2107,10 +1965,8 @@ bot.on("business_message", async ctx => {
       mediaType    = "video";
       fileId       = msg.video.file_id;
       fileUniqueId = msg.video.file_unique_id;
-      // video с protected content = таймер
       if (msg.video.has_protected_content) hasTimer = true;
     } else if (msg.video_note) {
-      // Кружки — всегда перехватываем как таймер (они пропадают)
       mediaType    = "video_note";
       fileId       = msg.video_note.file_id;
       fileUniqueId = msg.video_note.file_unique_id;
@@ -2119,7 +1975,6 @@ bot.on("business_message", async ctx => {
       mediaType    = "voice";
       fileId       = msg.voice.file_id;
       fileUniqueId = msg.voice.file_unique_id;
-      // Голосовые view-once: has_media_spoiler уже обработан выше
     } else if (msg.audio) {
       mediaType    = "audio";
       fileId       = msg.audio.file_id;
@@ -2138,7 +1993,6 @@ bot.on("business_message", async ctx => {
       fileUniqueId = msg.animation.file_unique_id;
     }
 
-    // НЕМЕДЛЕННОЕ скачивание медиа
     let filePath = null;
     if (fileId) {
       filePath = await downloadMedia(fileId, fileUniqueId, mediaType, uid, hasTimer);
@@ -2154,7 +2008,7 @@ bot.on("business_message", async ctx => {
     const content = msg.text || msg.caption || "";
     if (u.notify_scam && isScam(content)) {
       const sName = msg.from?.first_name || "?";
-      try { await bot.api.sendMessage(uid, `⚠️🚨 <b>СКАМ-ПОПЫТКА!</b>${isVip(uid,senderId)?" 🌟 VIP":""}\n\nОт: <b>${sName}</b>\n\n<blockquote>${short(content,400)}</blockquote>`, { parse_mode:"HTML" }); } catch(e){}
+      try { await bot.api.sendMessage(uid, `⚠️🚨 <b>СКАМ-ПОПЫТКА!</b>\n\nОт: <b>${sName}</b>\n\n<blockquote>${short(content,400)}</blockquote>`, { parse_mode:"HTML" }); } catch(e){}
     }
     if (u.notify_keywords && content) {
       const kws = db.prepare("SELECT keyword FROM keywords WHERE user_id=?").all(uid).map(r=>r.keyword);
@@ -2166,14 +2020,12 @@ bot.on("business_message", async ctx => {
       }
     }
 
-    // Уведомление о таймер-медиа — сразу отправляем файл
     if (u.notify_timer && hasTimer && filePath) {
       const ico = {photo:"📸 Фото",video:"🎬 Видео",video_note:"🎥 Кружок",voice:"🎤 Голосовое",audio:"🎵 Аудио"};
       const sName = msg.from?.first_name || "Пользователь";
-      const vipTag = isVip(uid, senderId) ? " 🌟 VIP" : "";
       try {
         await bot.api.sendMessage(uid,
-          `⏱ <b>Перехвачено таймер-медиа!</b>${vipTag}\n\n${ico[mediaType]||"📎 Файл"}\nОт: <b>${sName}</b>\n${isViewOnce?"👁 Одноразовое\n":""}✅ Файл сохранён`,
+          `⏱ <b>Перехвачено таймер-медиа!</b>\n\n${ico[mediaType]||"📎 Файл"}\nОт: <b>${sName}</b>\n${isViewOnce?"👁 Одноразовое\n":""}✅ Файл сохранён`,
           { parse_mode:"HTML" });
         await sendMediaFile(uid, filePath, mediaType, `⏱ От ${sName}${isViewOnce?" (одноразовое)":""}`);
       } catch(e){}
@@ -2183,7 +2035,6 @@ bot.on("business_message", async ctx => {
   } catch(e) { console.error("[business_message]", e.message); }
 });
 
-// Редактирование сообщения
 bot.on("edited_business_message", async ctx => {
   try {
     const msg = ctx.update.edited_business_message;
@@ -2191,7 +2042,7 @@ bot.on("edited_business_message", async ctx => {
     const conn = getConn(msg.business_connection_id);
     if (!conn) return;
 
-    const uid = conn.user_id; // ВСЕГДА владелец
+    const uid = conn.user_id;
     const u   = getUser(uid); if (!u) return;
 
     const original = getMsg(uid, msg.chat.id, msg.message_id);
@@ -2203,15 +2054,13 @@ bot.on("edited_business_message", async ctx => {
     if (!u.notify_edits) return;
 
     const sName  = msg.from?.first_name || "Пользователь";
-    const vipTag = isVip(uid, msg.from?.id||0) ? " 🌟 VIP" : "";
-    let notif    = `✏️ <b>Сообщение изменено</b>${vipTag}\n\nОт: <b>${sName}</b>\n\n`;
+    let notif    = `✏️ <b>Сообщение изменено</b>\n\nОт: <b>${sName}</b>\n\n`;
     if (origText) notif += `<b>Было:</b>\n<blockquote>${short(origText, 500)}</blockquote>\n\n`;
     notif += newText ? `<b>Стало:</b>\n<blockquote>${short(newText, 500)}</blockquote>` : `<i>(текст удалён)</i>`;
     try { await bot.api.sendMessage(uid, notif.slice(0,4096), { parse_mode:"HTML" }); } catch(e){}
   } catch(e) { console.error("[edited_business_message]", e.message); }
 });
 
-// Удаление сообщений
 bot.on("deleted_business_messages", async ctx => {
   try {
     const del    = ctx.update.deleted_business_messages;
@@ -2220,7 +2069,7 @@ bot.on("deleted_business_messages", async ctx => {
     const conn   = getConn(del.business_connection_id);
     if (!conn) return;
 
-    const uid = conn.user_id; // ВСЕГДА владелец
+    const uid = conn.user_id;
     const u   = getUser(uid);
 
     for (const mid of msgIds) markDeleted(uid, del.chat.id, mid);
@@ -2230,12 +2079,10 @@ bot.on("deleted_business_messages", async ctx => {
 
     const chatTitle = del.chat.title || del.chat.first_name || del.chat.username || `Chat#${del.chat.id}`;
 
-    // Определяем: массовое удаление / удаление чата
     const totalInChat = db.prepare("SELECT COUNT(*) c FROM messages WHERE user_id=? AND chat_id=?").get(uid, del.chat.id)?.c || 0;
     const isFullDelete = msgIds.length >= 5 || (totalInChat > 5 && msgIds.length >= Math.floor(totalInChat * 0.85));
 
     if (isFullDelete) {
-      // ZIP-архив всего чата
       const allChatMsgs = getChatMsgs(uid, del.chat.id);
       const msgsForZip  = allChatMsgs.length > 0 ? allChatMsgs : msgIds.map(id => getMsg(uid, del.chat.id, id)).filter(Boolean);
       try { await bot.api.sendMessage(uid, `🗑 <b>${msgIds.length >= totalInChat*0.85?"Чат удалён":"Массовое удаление"}</b>\n\nЧат: <b>${chatTitle}</b>\nУдалено: ${msgIds.length}\nВ архиве: ${msgsForZip.length}\n\n⏳ Создаю ZIP...`, { parse_mode:"HTML" }); } catch(e){}
@@ -2246,7 +2093,6 @@ bot.on("deleted_business_messages", async ctx => {
       return;
     }
 
-    // Одиночные уведомления
     const ico = {photo:"📸 Фото",video:"🎬 Видео",video_note:"🎥 Кружок",voice:"🎤 Голосовое",audio:"🎵 Аудио",document:"📄 Документ",sticker:"🎭 Стикер",animation:"🎬 GIF"};
     for (const mid of msgIds) {
       const saved = getMsg(uid, del.chat.id, mid);
@@ -2256,15 +2102,10 @@ bot.on("deleted_business_messages", async ctx => {
       }
       const sName  = saved.sender_name || saved.sender_username || `#${saved.sender_id}`;
       const ts     = (saved.created_at||"").slice(0,16).replace("T"," ");
-      const vipTag = isVip(uid, saved.sender_id) ? " 🌟 <b>VIP</b>" : "";
-      let notif    = `🗑 <b>Удалено</b>${vipTag}\n\nЧат: <b>${chatTitle}</b>\nОт: <b>${sName}</b>\nВремя: ${ts}\n\n`;
+      let notif    = `🗑 <b>Удалено</b>\n\nЧат: <b>${chatTitle}</b>\nОт: <b>${sName}</b>\nВремя: ${ts}\n\n`;
       if (saved.text||saved.caption) notif += `<b>Текст:</b>\n<blockquote>${short(saved.text||saved.caption,600)}</blockquote>\n\n`;
       if (saved.media_type) notif += `<b>Медиа:</b> ${ico[saved.media_type]||saved.media_type}${saved.has_timer?" <b>⏱ [ТАЙМЕР]</b>":""}${saved.is_view_once?" <b>[ОДНОРАЗОВОЕ]</b>":""}\n`;
-      const qkb = new InlineKeyboard()
-        .text(isVip(uid,saved.sender_id)?"❌ VIP":"🌟 +VIP", isVip(uid,saved.sender_id)?`qa_unvip_${saved.sender_id}`:`qa_vip_${saved.sender_id}`)
-        .text("👤 Профиль", `qa_profile_${saved.sender_id}`);
-      try { await bot.api.sendMessage(uid, notif.slice(0,4096), { parse_mode:"HTML", reply_markup:qkb }); } catch(e){}
-      // Отправляем файл
+      try { await bot.api.sendMessage(uid, notif.slice(0,4096), { parse_mode:"HTML" }); } catch(e){}
       const fp = saved.file_path;
       if (fp && fs.existsSync(fp)) {
         await sendMediaFile(uid, fp, saved.media_type, `📎 Файл от ${sName}${saved.has_timer?" [⏱]":""}`);
@@ -2277,27 +2118,22 @@ bot.on("deleted_business_messages", async ctx => {
 });
 
 // ================================================================
-//  USERBOT (gram-js) — запуск и мониторинг
+//  USERBOT (gram-js)
 // ================================================================
-const activeBots = new Map(); // uid → TelegramClient
+const activeBots = new Map();
 
-async function launchUserbot(uid, sessionStr, apiId, apiHash) {
+async function launchUserbot(uid, sessionStr) {
   if (activeBots.has(uid)) {
     try { await activeBots.get(uid).disconnect(); } catch(e){}
     activeBots.delete(uid);
   }
-  if (!apiId || !apiHash) {
-    // Попробуем взять из БД
-    const rec = db.prepare("SELECT api_id, api_hash FROM userbot_sessions WHERE user_id=?").get(uid);
-    if (!rec?.api_id || !rec?.api_hash) {
-      console.warn(`[UB] uid=${uid}: нет api_id/api_hash, пропускаем`);
-      return null;
-    }
-    apiId   = rec.api_id;
-    apiHash = rec.api_hash;
+  
+  if (!TG_API_ID || !TG_API_HASH) {
+    console.warn(`[UB] uid=${uid}: TG_API_ID/TG_API_HASH не настроены`);
+    return null;
   }
 
-  const client = new TelegramClient(new StringSession(sessionStr), apiId, apiHash, {
+  const client = new TelegramClient(new StringSession(sessionStr), TG_API_ID, TG_API_HASH, {
     connectionRetries: 5,
     retryDelay: 1000,
     useWSS: false,
@@ -2310,9 +2146,8 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
   activeBots.set(uid, client);
   db.prepare("UPDATE userbot_sessions SET is_active=1, error_count=0 WHERE user_id=?").run(uid);
 
-  console.log(`[UB] Запущен для uid=${uid}`);
+  console.log(`[UB] ✅ Запущен для uid=${uid}`);
 
-  // Новые сообщения
   client.addEventHandler(async event => {
     try {
       const msg = event.message;
@@ -2322,7 +2157,6 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
       const chatId     = msg.chatId?.toString() ? parseInt(msg.chatId.toString()) : 0;
       const senderName = (await getSenderName(client, msg.fromId)) || null;
 
-      // Обнаружение таймер-медиа (view once)
       const isViewOnce = !!msg.media?.ttlSeconds || !!msg.media?.roundMessage?.attributes?.find?.(a => a?.className === "DocumentAttributeVideo" && a?.roundMessage);
       const hasTimer   = isViewOnce;
 
@@ -2338,7 +2172,6 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
           const mimeType = m.document.mimeType || "";
           if (mimeType.startsWith("video/")) { mediaType = "video"; }
           else if (mimeType.startsWith("audio/")) { mediaType = "audio"; }
-          else if (mimeType.startsWith("image/")) { mediaType = "document"; }
           else { mediaType = "document"; }
           fileUniqueId = m.document.id?.toString();
         }
@@ -2346,7 +2179,6 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
       if (msg.media?.voice) { mediaType = "voice"; }
       if (msg.media?.audio) { mediaType = "audio"; }
 
-      // Немедленное скачивание для таймер-медиа
       if (hasTimer && msg.media) {
         try {
           const dir = path.join("media", String(uid));
@@ -2356,6 +2188,7 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
           if (buffer && buffer.length > 0) {
             fs.writeFileSync(fp, buffer);
             filePath = fp;
+            console.log(`[UB] ✅ Таймер-медиа скачано: ${fp}`);
           }
         } catch(e2) { console.warn("[UB media download]", e2.message); }
       }
@@ -2367,7 +2200,6 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
       const u = getUser(uid);
       if (!u) return;
 
-      // Уведомление о перехвате таймер-медиа
       if (u.notify_timer && hasTimer) {
         const ico = { photo:"📸 Фото", video:"🎬 Видео", voice:"🎤 Голосовое", audio:"🎵 Аудио", document:"📄 Файл" };
         try {
@@ -2382,7 +2214,6 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
     } catch(e) { console.error("[UB newMsg]", e.message); }
   }, new NewMessage({}));
 
-  // Отредактированные сообщения
   client.addEventHandler(async event => {
     try {
       const msg = event.message;
@@ -2404,12 +2235,10 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
     } catch(e) { console.error("[UB editMsg]", e.message); }
   }, new EditedMessage({}));
 
-  // Обработка удалений через DeletedMessage event
   const { DeletedMessage: DelEvt } = require("telegram/events");
   client.addEventHandler(async event => {
     try {
       const ids    = event.deletedIds || [];
-      // gram-js не всегда знает из какого чата — ищем по id в нашей БД
       for (const mid of ids) {
         const found = db.prepare("SELECT * FROM messages WHERE user_id=? AND message_id=? AND source='userbot' ORDER BY created_at DESC LIMIT 1").get(uid, mid);
         if (!found) continue;
@@ -2418,11 +2247,10 @@ async function launchUserbot(uid, sessionStr, apiId, apiHash) {
         const u = getUser(uid); if (!u || !u.notify_deletions) continue;
         const sName  = found.sender_name || `#${found.sender_id}`;
         const ico    = {photo:"📸",video:"🎬",voice:"🎤",audio:"🎵",video_note:"🎥",document:"📄"};
-        const vipTag = isVip(uid, found.sender_id) ? " 🌟 VIP" : "";
-        let notif    = `🗑 <b>UserBot: удалено</b>${vipTag}\n\nОт: <b>${sName}</b>\n\n`;
+        let notif    = `🗑 <b>UserBot: удалено</b>\n\nОт: <b>${sName}</b>\n\n`;
         if (found.text) notif += `<blockquote>${short(found.text,500)}</blockquote>\n`;
         if (found.media_type) notif += `${ico[found.media_type]||"📎"}${found.has_timer?" ⏱":""}\n`;
-        try { await bot.api.sendMessage(uid, notif.slice(0,4096), { parse_mode:"HTML", reply_markup: new InlineKeyboard().text(isVip(uid,found.sender_id)?"❌ VIP":"🌟 +VIP", isVip(uid,found.sender_id)?`qa_unvip_${found.sender_id}`:`qa_vip_${found.sender_id}`).text("👤 Профиль",`qa_profile_${found.sender_id}`) }); } catch(e){}
+        try { await bot.api.sendMessage(uid, notif.slice(0,4096), { parse_mode:"HTML" }); } catch(e){}
         if (found.file_path && fs.existsSync(found.file_path)) {
           await bot.api.sendDocument(uid, new InputFile(found.file_path), { caption: `📎 Файл от ${sName}${found.has_timer?" [⏱]":""}` }).catch(()=>{});
         }
@@ -2447,15 +2275,15 @@ async function disconnectUserbot(uid) {
     activeBots.delete(uid);
   }
   db.prepare("UPDATE userbot_sessions SET is_active=0 WHERE user_id=?").run(uid);
-  console.log(`[UB] Отключён uid=${uid}`);
+  console.log(`[UB] 🔴 Отключён uid=${uid}`);
 }
 
 async function restoreUserbots() {
-  const sessions = db.prepare("SELECT * FROM userbot_sessions WHERE is_active=1 AND session_str IS NOT NULL AND api_id IS NOT NULL").all();
-  console.log(`[UB] Восстановление ${sessions.length} сессий...`);
+  const sessions = db.prepare("SELECT * FROM userbot_sessions WHERE is_active=1 AND session_str IS NOT NULL").all();
+  console.log(`[UB] 🔄 Восстановление ${sessions.length} сессий...`);
   for (const s of sessions) {
-    try { await launchUserbot(s.user_id, s.session_str, s.api_id, s.api_hash); } catch(e) {
-      console.error(`[UB] Ошибка uid=${s.user_id}:`, e.message);
+    try { await launchUserbot(s.user_id, s.session_str); } catch(e) {
+      console.error(`[UB] ❌ Ошибка uid=${s.user_id}:`, e.message);
       db.prepare("UPDATE userbot_sessions SET is_active=0, error_count=error_count+1, last_error=? WHERE user_id=?").run(e.message, s.user_id);
     }
     await new Promise(r => setTimeout(r, 1500));
@@ -2479,40 +2307,27 @@ cron.schedule("0 8 * * *", async () => {
   }
 });
 
-cron.schedule("0 9 * * 1", async () => {
-  const from7 = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
-  const users = db.prepare("SELECT * FROM users WHERE digest_enabled=1 AND is_blocked=0").all();
-  for (const u of users) {
-    if (!checkSub(u.user_id)) continue;
-    const msgs = db.prepare("SELECT COUNT(*) c FROM messages WHERE user_id=? AND DATE(created_at)>=?").get(u.user_id,from7)?.c||0;
-    const dels = db.prepare("SELECT COUNT(*) c FROM messages WHERE user_id=? AND is_deleted=1 AND DATE(deleted_at)>=?").get(u.user_id,from7)?.c||0;
-    const timr = db.prepare("SELECT COUNT(*) c FROM messages WHERE user_id=? AND has_timer=1 AND DATE(created_at)>=?").get(u.user_id,from7)?.c||0;
-    try { await bot.api.sendMessage(u.user_id, `📊 <b>Недельный отчёт</b>\n\n💬 ${msgs} | 🗑 ${dels} | ⏱ ${timr}`, { parse_mode:"HTML" }); } catch(e){}
-    await new Promise(r=>setTimeout(r,100));
-  }
-});
-
 cron.schedule("0 3 * * *", () => {
   try {
     const ts  = new Date().toISOString().slice(0,10).replace(/-/g,"");
     const dst = path.join("backups", `merai_${ts}.db`);
-    if (!fs.existsSync(dst)) { fs.copyFileSync(DB_PATH, dst); console.log("[BACKUP]", dst); }
+    if (!fs.existsSync(dst)) { fs.copyFileSync(DB_PATH, dst); console.log("[BACKUP] ✅", dst); }
     const files = fs.readdirSync("backups").filter(f=>f.endsWith(".db")).sort();
     if (files.length>7) files.slice(0,files.length-7).forEach(f=>{ try{fs.unlinkSync(path.join("backups",f))}catch(e){} });
-  } catch(e) { console.error("[BACKUP]", e.message); }
+  } catch(e) { console.error("[BACKUP] ❌", e.message); }
 });
 
 // ================================================================
 //  ЗАПУСК
 // ================================================================
 async function main() {
-  console.log("=".repeat(55));
-  console.log("  MerAI — Monitoring & AI");
-  console.log("=".repeat(55));
+  console.log("=".repeat(60));
+  console.log("  MerAI — Monitoring & AI (FIXED VERSION)");
+  console.log("=".repeat(60));
   console.log(`[DB]  ${DB_PATH}`);
   console.log(`[BOT] ${BOT_TOKEN.slice(0,12)}...`);
   console.log(`[AI]  Groq: ${GROQ_KEY?"✅":"❌"} | Gemini: ${GEMINI_KEY?"✅":"❌"}`);
-  console.log(`[UB]  UserBot: каждый пользователь вводит свои API_ID/API_HASH`);
+  console.log(`[UB]  UserBot: ${TG_API_ID && TG_API_HASH?"✅ Настроен":"❌ Не настроен"}`);
 
   await bot.api.deleteWebhook({ drop_pending_updates: true }).catch(()=>{});
 
@@ -2522,11 +2337,15 @@ async function main() {
   const startPromise = bot.start({
     onStart: async info => {
       console.log(`✅ @${info.username} запущен`);
-      // Восстанавливаем userbot-сессии
       await restoreUserbots();
+      const stats = adminStats();
       try {
         await bot.api.sendMessage(ADMIN_ID,
-          `✅ <b>MerAI запущен</b>\n@${info.username}\n\n🤖 AI: ${GROQ_KEY?"Groq":""}${GEMINI_KEY?" + Gemini":""}\n🔗 UserBot: ✅ каждый пользователь вводит свои API-ключи\n💾 БД: ${DB_PATH}`,
+          `✅ <b>MerAI запущен (FIXED)</b>\n@${info.username}\n\n` +
+          `👥 Пользователей: ${fmt(stats.users)}\n` +
+          `🤖 AI: ${GROQ_KEY?"Groq":""}${GEMINI_KEY?" + Gemini":""}\n` +
+          `🔗 UserBot: ${TG_API_ID && TG_API_HASH?"✅":"❌"}\n` +
+          `💾 БД: ${DB_PATH}`,
           { parse_mode:"HTML" });
       } catch(e){}
     },
@@ -2539,4 +2358,4 @@ async function main() {
 process.once("SIGINT",  async () => { for (const [uid] of activeBots) await disconnectUserbot(uid); bot.stop(); process.exit(0); });
 process.once("SIGTERM", async () => { for (const [uid] of activeBots) await disconnectUserbot(uid); bot.stop(); process.exit(0); });
 
-main().catch(e => { console.error("FATAL:", e.message, e.stack); process.exit(1); });
+main().catch(e => { console.error("❌ FATAL:", e.message, e.stack); process.exit(1); });
